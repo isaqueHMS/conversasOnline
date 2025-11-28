@@ -9,6 +9,7 @@
   <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
+
   <div id="app">
 
     <div id="toolbar">
@@ -29,11 +30,23 @@
     <div id="mediaBar">
       <button id="imgBtn">Enviar imagem</button>
       <button id="audioBtn">Enviar áudio</button>
+      <button id="videoBtn">Enviar vídeo</button>
 
       <input type="file" id="imageInput" accept="image/*" hidden>
       <input type="file" id="audioInput" accept="audio/*" hidden>
+      <input type="file" id="videoInput" accept="video/*" hidden>
     </div>
 
+    <!-- Barra de progresso -->
+    <div id="progressWrapper">
+      <div id="progressBar"></div>
+    </div>
+
+  </div>
+
+  <!-- Modal de preview de imagem -->
+  <div id="imagePreviewModal">
+    <img id="previewImage">
   </div>
 
   <script src="client.js"></script>

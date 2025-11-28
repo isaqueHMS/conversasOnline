@@ -8,22 +8,35 @@ const roomInput = document.getElementById("roomInput");
 
 const imgBtn = document.getElementById("imgBtn");
 const audioBtn = document.getElementById("audioBtn");
+const videoBtn = document.getElementById("videoBtn");
+
 const imageInput = document.getElementById("imageInput");
 const audioInput = document.getElementById("audioInput");
+const videoInput = document.getElementById("videoInput");
 
-// Area de nome
 const nameInput = document.getElementById("nameInput");
 const saveNameBtn = document.getElementById("saveNameBtn");
 
-// Nome do usuário
-let username = localStorage.getItem("username") || "Anônimo";
+const progressBar = document.getElementById("progressBar");
+const previewModal = document.getElementById("imagePreviewModal");
+const previewImage = document.getElementById("previewImage");
 
-// Se já tem nome salvo, coloca no input
-if (nameInput) {
-  nameInput.value = username;
+let username = localStorage.getItem("username") || "Anônimo";
+nameInput.value = username;
+
+// Atualizar barra de progresso fake
+function startProgress() {
+  progressBar.style.width = "0%";
+  let progress = 0;
+
+  const interval = setInterval(() => {
+    progress += 5;
+    progressBar.style.width = progress + "%";
+    if (progress >= 100) clearInterval(interval);
+  }, 80);
 }
 
-// Função pra adicionar mensagens
+// Função de adicionar mensagem
 function addMessage(content, type = "text") {
   const msg = document.createElement("div");
   msg.classList.add("message");
@@ -35,7 +48,23 @@ function addMessage(content, type = "text") {
   if (type === "image") {
     const img = document.createElement("img");
     img.src = content;
+    img.style.maxWidth = "250px";
+    img.style.cursor = "zoom-in";
+
+    // Zoom ao clicar
+    img.onclick = () => {
+      previewImage.src = content;
+      previewModal.style.display = "flex";
+    };
+
+    const saveBtn = document.createElement("a");
+    saveBtn.textContent = "Salvar imagem";
+    saveBtn.href = content;
+    saveBtn.download = "imagem.png";
+    saveBtn.className = "save-btn";
+
     msg.appendChild(img);
+    msg.appendChild(saveBtn);
   }
 
   if (type === "audio") {
@@ -45,14 +74,26 @@ function addMessage(content, type = "text") {
     msg.appendChild(audio);
   }
 
+  if (type === "video") {
+    const video = document.createElement("video");
+    video.src = content;
+    video.controls = true;
+    video.style.maxWidth = "300px";
+    msg.appendChild(video);
+  }
+
   terminal.appendChild(msg);
   terminal.scrollTop = terminal.scrollHeight;
 }
 
-// Salvar / trocar nome
+// Fechar modal de preview
+previewModal.onclick = () => {
+  previewModal.style.display = "none";
+};
+
+// Salvar nome
 saveNameBtn.onclick = () => {
   const newName = nameInput.value.trim();
-
   if (newName.length < 2) {
     alert("Nome muito curto.");
     return;
@@ -67,96 +108,89 @@ saveNameBtn.onclick = () => {
 // Entrar na sala
 joinBtn.onclick = () => {
   const room = roomInput.value.trim();
-  if (!room) {
-    alert("Digite o nome da sala!");
-    return;
-  }
+  if (!room) return alert("Digite o nome da sala!");
 
   socket.emit("joinRoom", room);
   addMessage(`<span class="system">Você entrou na sala: ${room}</span>`);
 };
 
-// Enviar mensagem
+// Enviar mensagem texto
 function sendMessage() {
   const text = cmdInput.value.trim();
   if (!text) return;
 
   socket.emit("terminalInput", {
-    text: text,
-    username: username,
+    text,
+    username,
     meta: "text"
   });
 
   cmdInput.value = "";
 }
 
-// Clique no botão
 sendBtn.onclick = sendMessage;
-
-// Enter no input
 cmdInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendMessage();
 });
 
-// Enviar imagem
+// Função para enviar arquivos
+function sendFile(file, metaType) {
+  const reader = new FileReader();
+
+  startProgress();
+
+  reader.onload = () => {
+    socket.emit("terminalInput", {
+      meta: metaType,
+      data: reader.result,
+      username
+    });
+  };
+
+  reader.readAsDataURL(file);
+}
+
+// Botões de upload
 imgBtn.onclick = () => imageInput.click();
+audioBtn.onclick = () => audioInput.click();
+videoBtn.onclick = () => videoInput.click();
 
 imageInput.onchange = () => {
   const file = imageInput.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-
-  reader.onload = () => {
-    socket.emit("terminalInput", {
-      meta: "image",
-      type: "image",
-      data: reader.result,
-      username: username
-    });
-  };
-
-  reader.readAsDataURL(file);
+  if (file) sendFile(file, "image");
 };
-
-// Enviar áudio
-audioBtn.onclick = () => audioInput.click();
 
 audioInput.onchange = () => {
   const file = audioInput.files[0];
-  if (!file) return;
+  if (file) sendFile(file, "audio");
+};
 
-  const reader = new FileReader();
-
-  reader.onload = () => {
-    socket.emit("terminalInput", {
-      meta: "audio",
-      type: "audio",
-      data: reader.result,
-      username: username
-    });
-  };
-
-  reader.readAsDataURL(file);
+videoInput.onchange = () => {
+  const file = videoInput.files[0];
+  if (file) sendFile(file, "video");
 };
 
 // Receber mensagens
 socket.on("broadcastInput", ({ from, payload }) => {
-
   const name = payload.username || from;
 
   if (payload.meta === "text") {
-    addMessage(`<b>${name}:</b> ${payload.text}`, "text");
+    addMessage(`<b>${name}:</b> ${payload.text}`);
   }
 
   if (payload.meta === "image") {
-    addMessage(`<b>${name}:</b>`, "text");
+    addMessage(`<b>${name}:</b>`);
     addMessage(payload.data, "image");
   }
 
   if (payload.meta === "audio") {
-    addMessage(`<b>${name}:</b>`, "text");
+    addMessage(`<b>${name}:</b>`);
     addMessage(payload.data, "audio");
+  }
+
+  if (payload.meta === "video") {
+    addMessage(`<b>${name}:</b>`);
+    addMessage(payload.data, "video");
   }
 });
 

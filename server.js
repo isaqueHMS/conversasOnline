@@ -5,12 +5,20 @@ const { Server } = require("socket.io");
 const app = express();
 const server = http.createServer(app);
 
+// Limite geral do socket
 const io = new Server(server, {
-  maxHttpBufferSize: 1e8 // até 100MB
+  maxHttpBufferSize: 1e8 // 100MB
 });
 
-// Servir a pasta do front
+// Pasta do front
 app.use(express.static("public"));
+
+// Limites por tipo (base64 é maior que o arquivo real)
+const FILE_LIMITS = {
+  image: 20_000_000, // ~20MB
+  audio: 30_000_000, // ~30MB
+  video: 50_000_000  // ~50MB
+};
 
 io.on("connection", (socket) => {
   console.log("Conectado:", socket.id);
@@ -18,7 +26,7 @@ io.on("connection", (socket) => {
   socket.username = "Anônimo";
   socket.room = null;
 
-  // Entrar em uma sala
+  // Entrar em sala
   socket.on("joinRoom", (room) => {
     if (!room || typeof room !== "string") return;
 
@@ -26,44 +34,49 @@ io.on("connection", (socket) => {
     socket.room = room;
 
     socket.emit("system", `Você entrou na sala: ${room}`);
-    socket.to(room).emit("system", `Um usuário entrou: ${socket.username}`);
+    socket.to(room).emit("system", ` ${socket.username} entrou na sala`);
   });
 
-  // Receber mensagens, imagens e áudio
+  // Receber mensagens e midias
   socket.on("terminalInput", (payload) => {
     if (!socket.room) return;
     if (!payload || typeof payload !== "object") return;
 
-    // Atualizar nome se vier
+    // Atualizar nome
     if (payload.username && typeof payload.username === "string") {
       socket.username = payload.username.slice(0, 25);
     }
 
-    // Texto
+    // TEXTO
     if (payload.meta === "text") {
-      const text = payload.text;
-
-      if (!text || typeof text !== "string") return;
-      if (text.length > 1000) return; // limite de texto
+      if (!payload.text || typeof payload.text !== "string") return;
+      if (payload.text.length > 1000) return;
 
       io.to(socket.room).emit("broadcastInput", {
         from: socket.id,
         payload: {
           meta: "text",
-          text: text,
+          text: payload.text,
           username: socket.username
         }
       });
     }
 
-    // Imagem ou áudio
-    if (payload.meta === "image" || payload.meta === "audio") {
-      if (!payload.data) return;
+    // MIDIAS
+    if (
+      payload.meta === "image" ||
+      payload.meta === "audio" ||
+      payload.meta === "video"
+    ) {
+      if (!payload.data || typeof payload.data !== "string") return;
 
-      const dataSize = payload.data.length;
+      const size = payload.data.length;
+      const maxSize = FILE_LIMITS[payload.meta];
 
-      // Limite ~30MB base64
-      if (dataSize > 40_000_000) return;
+      if (size > maxSize) {
+        socket.emit("system", `Arquivo muito grande para ${payload.meta}`);
+        return;
+      }
 
       io.to(socket.room).emit("broadcastInput", {
         from: socket.id,
@@ -76,12 +89,12 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Desconexão
+  // Desconectou
   socket.on("disconnect", () => {
     if (socket.room) {
       socket.to(socket.room).emit(
         "system",
-        `Usuário ${socket.username} saiu`
+        ` ${socket.username} saiu da sala`
       );
     }
 
