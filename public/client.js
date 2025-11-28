@@ -57,7 +57,7 @@ const createWarBtn = document.getElementById("createWarBtn");
 const warTargetInput = document.getElementById("warTargetInput");
 const warZonePanel = document.getElementById("warZonePanel"); 
 
-// Elementos do Minigame (Certifique-se que estão no HTML atualizado)
+// Elementos do Minigame
 const warConfigArea = document.getElementById("warConfigArea");
 const warGameArea = document.getElementById("warGameArea");
 const noWarMsg = document.getElementById("noWarMsg");
@@ -183,14 +183,16 @@ banBtn.onclick = () => {
     }
 };
 
-// --- Chat de Clã ---
+// --- Chat de Clã (CORRIGIDO: REMOVIDO ADDMESSAGE LOCAL) ---
 clanChatSendBtn.onclick = () => {
     const txt = clanChatInput.value.trim();
     if(txt) {
         socket.emit("clanMessage", txt);
+        // addMessage retirado daqui para não duplicar
         clanChatInput.value = "";
     }
 };
+
 socket.on("clanChat", ({ from, text }) => {
     // Verifica se a mensagem veio de mim mesmo para mudar o nome
     const nome = (from === username) ? "[Eu]" : from;
@@ -198,6 +200,23 @@ socket.on("clanChat", ({ from, text }) => {
 });
 
 socket.on("clanInfo", (msg) => addMessage(msg, "system"));
+
+// --- RECEBIMENTO DE CONVITE (CORREÇÃO: PREENCHE INPUT AUTOMATICAMENTE) ---
+socket.on("clanInviteReceived", (data) => {
+    addMessage(`📩 <b>CONVITE:</b> Clã <span style="color:yellow">${data.clanName}</span> te chamou!`, "system");
+    
+    // Preenche o input automaticamente
+    if(clanInput) clanInput.value = data.clanName;
+    
+    // Abre a aba Início
+    if(typeof openTab === "function") openTab('tab-home');
+    
+    // Efeito visual no botão aceitar
+    if(acceptInviteBtn) {
+        acceptInviteBtn.style.background = "#10b981";
+        setTimeout(() => acceptInviteBtn.style.background = "", 2000);
+    }
+});
 
 // --- ATUALIZAÇÃO DA TELA DO CLÃ ---
 socket.on("clanUpdated", (data) => {
@@ -381,28 +400,4 @@ socket.on("ranking", (list) => {
             <span>${c.points} pts</span>
          </div>`
     ).join("");
-});
-// --- CORREÇÃO DE CONVITES ---
-socket.on("clanInviteReceived", (data) => {
-    // 1. Toca um alerta visual
-    addMessage(`📩 <b>CONVITE:</b> O clã <span style="color:yellow">${data.clanName}</span> te convidou!`, "system");
-    alert(`Você recebeu um convite do clã: ${data.clanName}\nO nome foi preenchido automaticamente na aba Início.`);
-
-    // 2. Preenche o campo automaticamente para o botão "Aceitar" funcionar
-    if(clanInput) {
-        clanInput.value = data.clanName;
-    }
-
-    // 3. Muda para a aba de início para facilitar
-    openTab('tab-home');
-    
-    // 4. Faz o botão de aceitar piscar (efeito visual opcional)
-    if(acceptInviteBtn) {
-        acceptInviteBtn.style.background = "#10b981"; // Verde forte
-        acceptInviteBtn.innerText = "ACEITAR AGORA";
-        setTimeout(() => {
-            acceptInviteBtn.style.background = ""; 
-            acceptInviteBtn.innerText = "Aceitar";
-        }, 5000);
-    }
 });

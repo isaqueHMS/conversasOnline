@@ -5,305 +5,317 @@ const { Server } = require("socket.io");
 const app = express();
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  maxHttpBufferSize: 1e8 // Aumentado para suportar uploads maiores
-});
+const io = new Server(server, { maxHttpBufferSize: 1e8 });
 
 app.use(express.static("public"));
 
 // =================== CONFIGURAÇÕES ===================
-const FILE_LIMITS = {
-  image: 20_000_000,
-  audio: 30_000_000,
-  video: 50_000_000
+const LIMITS = {
+  admins: 3,
+  coAdmins: 3,
+  members: 50
 };
 
-const ADMIN_PASSWORD = "isaquinho";
+// =================== ESTADO ===================
+const rooms = {};
+const clans = {}; 
+// Estrutura: { owner, admins: Set, coAdmins: Set, members: Set, banned: Set, muted: Set, wins, points }
 
-// =================== ESTADO DO SERVIDOR ===================
-const rooms = {};                // roomName -> { users: Set(socketId) }
-const clans = {};                // clanName -> { owner, admins: Set, members: Set, wins, points }
-const userClans = new Map();     // socket.id -> clanName
-const usernameToSocket = new Map(); // username -> socket.id
-const socketToUsername = new Map(); // socket.id -> username
-const invitations = new Map();   // clanName -> Set(socket.id) invited
-const bans = new Set();
-const mutes = new Set();
+const userClans = new Map();
+const usernameToSocket = new Map();
+const socketToUsername = new Map();
+const invitations = new Map();
+const userStats = {};
+const wars = {};
 
-// Estatísticas dos jogadores (Batalhas, etc)
-const userStats = {}; // { "Username": { battles: 0 } }
+function generateId(prefix = "") { return prefix + Math.random().toString(36).slice(2, 9); }
 
-// Guerras
-const wars = {}; 
-
-function generateId(prefix = "") {
-  return prefix + Math.random().toString(36).slice(2, 9);
-}
-
-// =================== FUNÇÕES AUXILIARES (A MÁGICA ESTÁ AQUI) ===================
-
-function getClanOfUser(socketId) {
-  return userClans.get(socketId) || null;
-}
-
+// =================== FUNÇÕES AUXILIARES ===================
+function getClanOfUser(socketId) { return userClans.get(socketId) || null; }
 function getSocketByUsername(username) {
   const id = usernameToSocket.get(username);
-  if (!id) return null;
-  return io.sockets.sockets.get(id) || null;
+  return id ? io.sockets.sockets.get(id) : null;
 }
 
-// Essa é a função que estava faltando/errada antes
 function serializeClanForClient(clanName) {
   const c = clans[clanName];
   if (!c) return null;
 
-  // Função para montar o objeto de cada membro
   const getMemberData = (socketId) => {
-    // Tenta pegar o nome pelo Socket ID. Se o user desconectou mas não saiu do clã, tenta achar o nome antigo ou põe Offline
-    const name = socketToUsername.get(socketId) || "Offline/Desconhecido";
-    
+    const name = socketToUsername.get(socketId) || "Offline";
     let role = "Membro";
     if (c.owner === socketId) role = "Dono";
     else if (c.admins.has(socketId)) role = "Admin";
-    
-    // Pega as batalhas do nome do usuário
+    else if (c.coAdmins.has(socketId)) role = "Co-Admin";
+
     const stats = userStats[name] || { battles: 0 };
-    
-    return { name, role, battles: stats.battles };
+    return { name, role, battles: stats.battles, muted: c.muted.has(socketId) };
   };
 
-  // Converte a lista de IDs em lista de objetos detalhados
-  const detailedMembers = Array.from(c.members).map(id => getMemberData(id));
+  // Junta todos os IDs (Membros + Staff)
+  const allIds = new Set([...c.members, ...c.admins, ...c.coAdmins, c.owner]);
+  const detailedMembers = Array.from(allIds).map(id => getMemberData(id));
 
-  // Ordena: Dono > Admin > Membro
+  // Ordenação Hierárquica
   detailedMembers.sort((a, b) => {
-      const roles = { "Dono": 3, "Admin": 2, "Membro": 1 };
-      const roleDiff = roles[b.role] - roles[a.role];
-      if (roleDiff !== 0) return roleDiff;
-      return 0;
+      const roles = { "Dono": 4, "Admin": 3, "Co-Admin": 2, "Membro": 1 };
+      return roles[b.role] - roles[a.role];
   });
 
   return {
     name: clanName,
-    owner: socketToUsername.get(c.owner) || "Desconhecido",
-    members: detailedMembers, // Agora enviamos a lista completa detalhada
+    owner: socketToUsername.get(c.owner) || "Unknown",
+    members: detailedMembers,
     wins: c.wins || 0,
     points: c.points || 0
   };
 }
 
-function computeRanking() {
-  return Object.keys(clans)
-    .map(name => ({ name, wins: clans[name].wins || 0, points: clans[name].points || 0 }))
-    .sort((a,b) => b.wins - a.wins || b.points - a.points);
-}
-
-// =================== CONEXÃO SOCKET ===================
+// =================== SOCKET ===================
 io.on("connection", (socket) => {
   console.log("Conectado:", socket.id);
 
-  // Nome padrão
   let username = "Anônimo";
   socketToUsername.set(socket.id, username);
   socket.username = username;
   socket.room = null;
-  socket.isAdmin = false;
 
-  // Atualizar Username
+  // --- USERNAME ---
   socket.on("setUsername", (newName) => {
     if (!newName || typeof newName !== "string") return;
     newName = newName.slice(0, 25).trim();
     
     const prev = socketToUsername.get(socket.id);
     if (prev) usernameToSocket.delete(prev);
-
+    
     socketToUsername.set(socket.id, newName);
     usernameToSocket.set(newName, socket.id);
     socket.username = newName;
     
-    // Se o usuário já tiver stats salvos, mantemos, senão cria novo
     if (!userStats[newName]) userStats[newName] = { battles: 0 };
-
-    socket.emit("system", `Nome atualizado para ${newName}`);
+    socket.emit("system", `Nome atualizado: ${newName}`);
     
-    // Se estiver em clã, avisa pra atualizar a lista de nomes
-    const clanName = getClanOfUser(socket.id);
-    if(clanName) io.emit("clanUpdated", serializeClanForClient(clanName));
-  });
-
-  // Entrar em Sala
-  socket.on("joinRoom", (roomName) => {
-    if (!roomName || typeof roomName !== "string") return;
-    if (socket.room) {
-      socket.leave(socket.room);
-      if (rooms[socket.room]) {
-        rooms[socket.room].users.delete(socket.id);
-        if (rooms[socket.room].users.size === 0) delete rooms[socket.room];
-      }
-    }
-    socket.join(roomName);
-    socket.room = roomName;
-    rooms[roomName] = rooms[roomName] || { users: new Set() };
-    rooms[roomName].users.add(socket.id);
-    socket.emit("system", `Entrou na sala: ${roomName}`);
-  });
-
-  // Chat e Mídia
-  socket.on("terminalInput", (payload) => {
-    if (!payload || typeof payload !== "object") return;
-    const { meta, text, data } = payload;
-
-    // Comandos Admin (/admin, /ban, etc) - Simplificado
-    if (meta === "text" && text.startsWith("/")) {
-        if(text.startsWith("/admin " + ADMIN_PASSWORD)) {
-            socket.isAdmin = true;
-            return socket.emit("system", "Você agora é Admin!");
-        }
-    }
-
-    if (socket.room) {
-      io.to(socket.room).emit("broadcastInput", {
-        from: socket.id,
-        payload: { meta, text, data, username: socket.username }
-      });
-    } else {
-        socket.emit("system", "Entre em uma sala primeiro!");
-    }
-  });
-
-  // ================== CLÃS ==================
-  socket.on("createClan", (clanName) => {
-    if (!clanName) return;
-    clanName = clanName.trim();
-    if (clans[clanName]) return socket.emit("clanInfo", "Clã já existe.");
-    if (userClans.has(socket.id)) return socket.emit("clanInfo", "Saia do seu clã atual antes.");
-
-    clans[clanName] = { owner: socket.id, admins: new Set(), members: new Set([socket.id]), wins: 0, points: 0 };
-    userClans.set(socket.id, clanName);
-    
-    socket.emit("clanInfo", `Clã ${clanName} criado!`);
-    io.emit("clanUpdated", serializeClanForClient(clanName));
-    io.emit("clanList", {}); // Força atualização da lista geral (simplificado)
-  });
-
-socket.on("inviteToClan", (target) => {
     const cName = getClanOfUser(socket.id);
-    if (!cName) return socket.emit("clanInfo", "Você não tem clã.");
-    
-    const c = clans[cName];
-    // Verifica permissão (Dono, Admin ou Co-Admin)
-    if (c.owner !== socket.id && !c.admins.has(socket.id) && !c.coAdmins.has(socket.id)) 
-        return socket.emit("clanInfo", "Sem permissão para convidar.");
+    if(cName) io.emit("clanUpdated", serializeClanForClient(cName));
+  });
 
-    // Tenta achar o usuário (O NOME TEM QUE SER EXATO)
+  // --- SALAS & CHAT PÚBLICO ---
+  socket.on("joinRoom", (r) => {
+    if(socket.room && rooms[socket.room]) rooms[socket.room].users.delete(socket.id);
+    socket.join(r); socket.room = r;
+    rooms[r] = rooms[r] || { users: new Set() };
+    rooms[r].users.add(socket.id);
+    socket.emit("system", `Sala: ${r}`);
+  });
+  
+  socket.on("terminalInput", ({ meta, text, data }) => {
+    if (socket.room) io.to(socket.room).emit("broadcastInput", { from: socket.id, payload: { meta, text, data, username: socket.username } });
+  });
+
+  // ================== SISTEMA DE CLÃS (CORE) ==================
+  socket.on("createClan", (name) => {
+    if (!name) return;
+    name = name.trim();
+    if (clans[name]) return socket.emit("clanInfo", "Nome já existe.");
+    if (userClans.has(socket.id)) return socket.emit("clanInfo", "Saia do atual.");
+
+    clans[name] = { 
+        owner: socket.id, 
+        admins: new Set(), 
+        coAdmins: new Set(), 
+        members: new Set(), // Membros comuns
+        banned: new Set(),
+        muted: new Set(),
+        wins: 0, points: 0 
+    };
+    userClans.set(socket.id, name);
+    
+    socket.emit("clanInfo", `Clã ${name} criado.`);
+    io.emit("clanUpdated", serializeClanForClient(name));
+    io.emit("clanList", getAllClansList());
+  });
+
+  // --- CONVITES (CORRIGIDO) ---
+  socket.on("inviteToClan", (target) => {
+    const cName = getClanOfUser(socket.id);
+    if (!cName) return socket.emit("clanInfo", "Sem clã.");
+    const c = clans[cName];
+    
+    if (c.owner !== socket.id && !c.admins.has(socket.id) && !c.coAdmins.has(socket.id)) 
+        return socket.emit("clanInfo", "Sem permissão.");
+
     const tSocket = getSocketByUsername(target);
+    if (!tSocket) return socket.emit("clanInfo", "Usuário offline.");
+    if (c.banned.has(tSocket.username) || c.banned.has(tSocket.id)) return socket.emit("clanInfo", "Banido.");
     
-    if (!tSocket) return socket.emit("clanInfo", "Usuário não encontrado ou offline.");
-    if (c.banned.has(tSocket.username) || c.banned.has(tSocket.id)) return socket.emit("clanInfo", "Este usuário está banido.");
-    
-    // Verifica limite
     const total = 1 + c.admins.size + c.coAdmins.size + c.members.size;
     if(total >= LIMITS.members) return socket.emit("clanInfo", "Clã cheio.");
 
-    // Salva o convite
     invitations.set(cName, invitations.get(cName) || new Set());
     invitations.get(cName).add(tSocket.id);
-
-    // --- AQUI ESTA A CORREÇÃO ---
-    // Envia um evento especial com o NOME DO CLÃ para o alvo
-    tSocket.emit("clanInviteReceived", { clanName: cName, from: socket.username });
     
+    // EVIA O EVENTO ESPECIAL PARA O CLIENTE PREENCHER O NOME
+    tSocket.emit("clanInviteReceived", { clanName: cName, from: socket.username });
     socket.emit("clanInfo", `Convite enviado para ${target}.`);
   });
 
-  socket.on("acceptInvite", (clanName) => {
-    const inv = invitations.get(clanName);
-    if (!inv || !inv.has(socket.id)) return socket.emit("clanInfo", "Sem convite pendente.");
+  socket.on("acceptInvite", (cName) => {
+    const inv = invitations.get(cName);
+    if (!inv || !inv.has(socket.id)) return socket.emit("clanInfo", "Sem convite.");
     
-    clans[clanName].members.add(socket.id);
-    userClans.set(socket.id, clanName);
+    const c = clans[cName];
+    c.members.add(socket.id);
+    userClans.set(socket.id, cName);
     inv.delete(socket.id);
     
-    io.emit("clanUpdated", serializeClanForClient(clanName));
-    socket.emit("clanInfo", `Você entrou no clã ${clanName}`);
-  });
-  
-  socket.on("leaveClan", () => {
-      const clanName = getClanOfUser(socket.id);
-      if(!clanName) return;
-      
-      const c = clans[clanName];
-      c.members.delete(socket.id);
-      c.admins.delete(socket.id);
-      userClans.delete(socket.id);
-      
-      // Se era dono, passar liderança ou deletar
-      if(c.owner === socket.id) {
-          if(c.members.size > 0) {
-              const newOwner = c.members.values().next().value;
-              c.owner = newOwner;
-          } else {
-              delete clans[clanName];
-          }
-      }
-      
-      socket.emit("clanInfo", "Você saiu do clã.");
-      socket.emit("clanUpdated", null); // Limpa tela do usuário
-      if(clans[clanName]) io.emit("clanUpdated", serializeClanForClient(clanName));
+    socket.emit("clanInfo", `Entrou em ${cName}`);
+    io.emit("clanUpdated", serializeClanForClient(cName));
   });
 
-  socket.on("requestClans", () => {
-      const list = {};
-      for(let name in clans) list[name] = serializeClanForClient(name);
-      socket.emit("clanList", list);
-  });
-
+  // --- PROMOÇÃO (LÓGICA HIERARQUIA) ---
   socket.on("promoteMember", (targetName) => {
-      const clanName = getClanOfUser(socket.id);
-      if(!clanName) return;
-      const c = clans[clanName];
-      if(c.owner !== socket.id) return socket.emit("clanInfo", "Apenas o dono promove.");
-      
-      const targetSock = getSocketByUsername(targetName);
-      if(targetSock && c.members.has(targetSock.id)) {
-          c.admins.add(targetSock.id);
-          io.emit("clanUpdated", serializeClanForClient(clanName));
+    const cName = getClanOfUser(socket.id); if(!cName) return;
+    const c = clans[cName];
+    const tSocket = getSocketByUsername(targetName);
+    if(!tSocket || getClanOfUser(tSocket.id) !== cName) return;
+
+    const myRole = c.owner === socket.id ? 3 : c.admins.has(socket.id) ? 2 : c.coAdmins.has(socket.id) ? 1 : 0;
+    const targetId = tSocket.id;
+    let targetRole = c.admins.has(targetId) ? 2 : c.coAdmins.has(targetId) ? 1 : 0;
+
+    // Co-Admin/Admin promovendo Membro -> Co-Admin
+    if ((myRole === 1 || myRole === 2) && targetRole === 0) {
+        if(c.coAdmins.size >= LIMITS.coAdmins) return socket.emit("clanInfo", "Max Co-Admins.");
+        c.members.delete(targetId); c.coAdmins.add(targetId);
+    }
+    // Admin promovendo Co-Admin -> Admin
+    else if (myRole === 2 && targetRole === 1) {
+         if(c.admins.size >= LIMITS.admins) return socket.emit("clanInfo", "Max Admins.");
+         c.coAdmins.delete(targetId); c.admins.add(targetId);
+    }
+    // Dono promovendo
+    else if (myRole === 3) {
+        if (targetRole === 0) { // Membro -> Co
+            if(c.coAdmins.size >= LIMITS.coAdmins) return;
+            c.members.delete(targetId); c.coAdmins.add(targetId);
+        } else if (targetRole === 1) { // Co -> Admin
+            if(c.admins.size >= LIMITS.admins) return;
+            c.coAdmins.delete(targetId); c.admins.add(targetId);
+        } else if (targetRole === 2) { // Admin -> Dono (Troca)
+            c.owner = targetId;
+            c.admins.delete(targetId);
+            c.admins.add(socket.id);
+            io.emit("system", `CLÃ ${cName}: ${tSocket.username} é o novo DONO!`);
+        }
+    }
+    io.emit("clanUpdated", serializeClanForClient(cName));
+  });
+
+  // --- REBAIXAMENTO ---
+  socket.on("demoteMember", (targetName) => {
+    const cName = getClanOfUser(socket.id); if(!cName) return;
+    const c = clans[cName];
+    const tSocket = getSocketByUsername(targetName);
+    if(!tSocket) return;
+    
+    const myRole = c.owner === socket.id ? 3 : c.admins.has(socket.id) ? 2 : 0;
+    const tRole = c.admins.has(tSocket.id) ? 2 : c.coAdmins.has(tSocket.id) ? 1 : 0;
+
+    if (myRole <= tRole && myRole !== 3) return; // Não pode rebaixar superior/igual
+    if (myRole === 0 || c.coAdmins.has(socket.id)) return; // Co-Admin não rebaixa
+
+    if (myRole === 2 && tRole === 1) { // Admin rebaixa Co
+        c.coAdmins.delete(tSocket.id); c.members.add(tSocket.id);
+    }
+    else if (myRole === 3) { // Dono rebaixa qualquer um
+        if(tRole === 2) { c.admins.delete(tSocket.id); c.coAdmins.add(tSocket.id); }
+        else if(tRole === 1) { c.coAdmins.delete(tSocket.id); c.members.add(tSocket.id); }
+    }
+    io.emit("clanUpdated", serializeClanForClient(cName));
+  });
+
+  // --- PODERES DONO ---
+  socket.on("kickMember", (targetName) => {
+      const cName = getClanOfUser(socket.id); if(!cName) return;
+      const c = clans[cName];
+      if(c.owner !== socket.id) return;
+      const tSocket = getSocketByUsername(targetName);
+      if(tSocket && tSocket.id !== socket.id) {
+          removeUserFromClanStruct(cName, tSocket.id);
+          tSocket.emit("clanInfo", "Você foi expulso.");
+          io.emit("clanUpdated", serializeClanForClient(cName));
       }
   });
 
-  socket.on("demoteMember", (targetName) => {
-      const clanName = getClanOfUser(socket.id);
-      if(!clanName) return;
-      const c = clans[clanName];
+  socket.on("banMember", (targetName) => {
+      const cName = getClanOfUser(socket.id); if(!cName) return;
+      const c = clans[cName];
       if(c.owner !== socket.id) return;
-      
-      const targetSock = getSocketByUsername(targetName);
-      if(targetSock) {
-          c.admins.delete(targetSock.id);
-          io.emit("clanUpdated", serializeClanForClient(clanName));
-      }
+      const tSocket = getSocketByUsername(targetName);
+      if(tSocket) {
+          removeUserFromClanStruct(cName, tSocket.id);
+          c.banned.add(tSocket.id); c.banned.add(targetName);
+          tSocket.emit("clanInfo", "BANIDO DO CLÃ.");
+      } else { c.banned.add(targetName); }
+      io.emit("clanUpdated", serializeClanForClient(cName));
   });
-  
+
+  socket.on("muteMember", (targetName) => {
+      const cName = getClanOfUser(socket.id); if(!cName) return;
+      const c = clans[cName];
+      if(c.owner !== socket.id) return;
+      const tSocket = getSocketByUsername(targetName);
+      if(tSocket) {
+          if(c.muted.has(tSocket.id)) { c.muted.delete(tSocket.id); socket.emit("clanInfo", "Desmutado."); }
+          else { c.muted.add(tSocket.id); socket.emit("clanInfo", "Mutado."); }
+      }
+      io.emit("clanUpdated", serializeClanForClient(cName));
+  });
+
+  socket.on("leaveClan", () => {
+    const cName = getClanOfUser(socket.id); if(!cName) return;
+    removeUserFromClanStruct(cName, socket.id);
+    socket.emit("clanUpdated", null);
+    if(clans[cName]) io.emit("clanUpdated", serializeClanForClient(cName));
+  });
+
+  function removeUserFromClanStruct(cName, uid) {
+      const c = clans[cName];
+      c.members.delete(uid); c.admins.delete(uid); c.coAdmins.delete(uid);
+      userClans.delete(uid);
+      if(c.owner === uid) {
+          if(c.admins.size > 0) c.owner = c.admins.values().next().value;
+          else if(c.coAdmins.size > 0) c.owner = c.coAdmins.values().next().value;
+          else if(c.members.size > 0) c.owner = c.members.values().next().value;
+          else delete clans[cName];
+      }
+  }
+
+  socket.on("requestClans", () => socket.emit("clanList", getAllClansList()));
+
   socket.on("clanMessage", (txt) => {
-      const clanName = getClanOfUser(socket.id);
-      if(!clanName || !txt) return;
-      const c = clans[clanName];
-      c.members.forEach(mid => {
-          const s = io.sockets.sockets.get(mid);
+      const cName = getClanOfUser(socket.id); if(!cName) return;
+      const c = clans[cName];
+      if(c.muted.has(socket.id)) return socket.emit("clanInfo", "Silenciado.");
+      const all = new Set([...c.members, ...c.coAdmins, ...c.admins, c.owner]);
+      all.forEach(uid => {
+          const s = io.sockets.sockets.get(uid);
           if(s) s.emit("clanChat", { from: socket.username, text: txt });
       });
   });
 
   // ================== GUERRAS ==================
   socket.on("createWar", ({ targetClan, durationSec }) => {
-      const myClan = getClanOfUser(socket.id);
-      if(!myClan || !clans[targetClan]) return;
-      
+      const cName = getClanOfUser(socket.id);
+      if(!cName || !clans[targetClan]) return;
+      const c = clans[cName];
+      // Apenas Dono ou Admin
+      if(c.owner !== socket.id && !c.admins.has(socket.id)) return socket.emit("clanInfo", "Sem permissão.");
+
       const warId = generateId("war");
-      wars[warId] = { id: warId, clanA: myClan, clanB: targetClan, scores: { [myClan]:0, [targetClan]:0 }, active: true };
-      
-      io.emit("warCreated", { warId, clanA: myClan, clanB: targetClan });
-      
+      wars[warId] = { id: warId, clanA: cName, clanB: targetClan, scores: { [cName]:0, [targetClan]:0 }, active: true };
+      io.emit("warCreated", { warId, clanA: cName, clanB: targetClan });
+
       setTimeout(() => {
           if(wars[warId]) {
               const w = wars[warId];
@@ -311,18 +323,14 @@ socket.on("inviteToClan", (target) => {
               if(w.scores[w.clanA] > w.scores[w.clanB]) winner = w.clanA;
               else if(w.scores[w.clanB] > w.scores[w.clanA]) winner = w.clanB;
               
-              if(winner) {
-                  clans[winner].wins++;
-                  clans[winner].points += 10;
-              }
-              // Atualizar pontos baseados no score
+              if(winner) { clans[winner].wins++; clans[winner].points += 10; }
               clans[w.clanA].points += w.scores[w.clanA];
               clans[w.clanB].points += w.scores[w.clanB];
               
-              io.emit("warEnded", { warId, winner, scores: w.scores });
+              io.emit("warEnded", { warId, winner });
+              delete wars[warId];
               io.emit("clanUpdated", serializeClanForClient(w.clanA));
               io.emit("clanUpdated", serializeClanForClient(w.clanB));
-              delete wars[warId];
           }
       }, durationSec * 1000);
   });
@@ -330,42 +338,34 @@ socket.on("inviteToClan", (target) => {
   socket.on("submitWarPoint", ({ warId, points }) => {
       const w = wars[warId];
       if(!w || !w.active) return;
-      
-      const myClan = getClanOfUser(socket.id);
-      if(w.clanA !== myClan && w.clanB !== myClan) return;
-      
-      w.scores[myClan] += (points || 1);
-      
-      // Contar batalha individual para o usuário
+      const cName = getClanOfUser(socket.id);
+      const c = clans[cName];
+      // Co-Admin não pontua
+      if(c.coAdmins.has(socket.id)) return;
+
+      w.scores[cName] += points || 1;
       if(!userStats[socket.username]) userStats[socket.username] = { battles: 0 };
-      userStats[socket.username].battles += 1;
+      userStats[socket.username].battles++;
       
       io.emit("warUpdated", { warId, scores: w.scores });
-      
-      // Atualizar a lista de membros para mostrar a nova batalha
-      io.emit("clanUpdated", serializeClanForClient(myClan));
+      io.emit("clanUpdated", serializeClanForClient(cName));
   });
 
   socket.on("requestRanking", () => {
-      socket.emit("ranking", computeRanking());
+    socket.emit("ranking", Object.keys(clans).map(n => ({ name: n, wins: clans[n].wins, points: clans[n].points })).sort((a,b)=>b.wins-a.wins));
   });
 
-  // ================== DISCONNECT ==================
   socket.on("disconnect", () => {
-      console.log("Saiu:", socket.id);
-      if(socket.room && rooms[socket.room]) {
-          rooms[socket.room].users.delete(socket.id);
-      }
-      
-      const clanName = getClanOfUser(socket.id);
-      // Nota: Não removemos do clã ao desconectar, senão o clã some quando fecha a aba
-      // Apenas atualizamos o status se necessário
-      
+      if(socket.room && rooms[socket.room]) rooms[socket.room].users.delete(socket.id);
       socketToUsername.delete(socket.id);
-      // usernameToSocket mantemos ou deletamos? Se deletar, o user fica "Offline" na lista
-      // usernameToSocket.delete(socket.username); 
   });
 });
 
+function getAllClansList() {
+    const list = {};
+    for(let n in clans) list[n] = serializeClanForClient(n);
+    return list;
+}
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
