@@ -20,6 +20,17 @@
       <button id="saveNameBtn">Salvar nome</button>
     </div>
 
+    <!-- PAINEL DE CLÃS -->
+    <div id="clanPanel">
+      <input id="clanInput" type="text" placeholder="Nome do clã">
+      <button id="createClanBtn">Criar clã</button>
+      <button id="joinClanBtn">Entrar no clã</button>
+      <button id="leaveClanBtn">Sair do clã</button>
+      <button id="listClansBtn">Ver clãs</button>
+
+      <div id="clanInfo" aria-live="polite"></div>
+    </div>
+
     <div id="terminal" tabindex="0"></div>
 
     <div id="controls">
@@ -45,8 +56,8 @@
   </div>
 
   <!-- Modal de preview de imagem -->
-  <div id="imagePreviewModal">
-    <img id="previewImage">
+  <div id="imagePreviewModal" role="dialog" aria-hidden="true">
+    <img id="previewImage" alt="Pré-visualização da imagem">
   </div>
 
   <script src="client.js"></script>

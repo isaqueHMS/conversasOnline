@@ -21,10 +21,18 @@ const progressBar = document.getElementById("progressBar");
 const previewModal = document.getElementById("imagePreviewModal");
 const previewImage = document.getElementById("previewImage");
 
+// ---- CLANS: elementos do HTML ----
+const clanInput = document.getElementById("clanInput");
+const createClanBtn = document.getElementById("createClanBtn");
+const joinClanBtn = document.getElementById("joinClanBtn");
+const leaveClanBtn = document.getElementById("leaveClanBtn");
+const listClansBtn = document.getElementById("listClansBtn");
+const clanInfoDiv = document.getElementById("clanInfo");
+
 let username = localStorage.getItem("username") || "Anônimo";
 nameInput.value = username;
 
-// Atualizar barra de progresso fake
+// =================== PROGRESSO ===================
 function startProgress() {
   progressBar.style.width = "0%";
   let progress = 0;
@@ -32,11 +40,12 @@ function startProgress() {
   const interval = setInterval(() => {
     progress += 5;
     progressBar.style.width = progress + "%";
+
     if (progress >= 100) clearInterval(interval);
   }, 80);
 }
 
-// Função de adicionar mensagem
+// =================== MENSAGENS ===================
 function addMessage(content, type = "text") {
   const msg = document.createElement("div");
   msg.classList.add("message");
@@ -51,7 +60,6 @@ function addMessage(content, type = "text") {
     img.style.maxWidth = "250px";
     img.style.cursor = "zoom-in";
 
-    // Zoom ao clicar
     img.onclick = () => {
       previewImage.src = content;
       previewModal.style.display = "flex";
@@ -86,14 +94,15 @@ function addMessage(content, type = "text") {
   terminal.scrollTop = terminal.scrollHeight;
 }
 
-// Fechar modal de preview
+// =================== MODAL PREVIEW ===================
 previewModal.onclick = () => {
   previewModal.style.display = "none";
 };
 
-// Salvar nome
+// =================== NOME DE USUÁRIO ===================
 saveNameBtn.onclick = () => {
   const newName = nameInput.value.trim();
+
   if (newName.length < 2) {
     alert("Nome muito curto.");
     return;
@@ -105,7 +114,7 @@ saveNameBtn.onclick = () => {
   addMessage(`<span class="system">Seu nome agora é ${username}</span>`);
 };
 
-// Entrar na sala
+// =================== SALA ===================
 joinBtn.onclick = () => {
   const room = roomInput.value.trim();
   if (!room) return alert("Digite o nome da sala!");
@@ -114,10 +123,68 @@ joinBtn.onclick = () => {
   addMessage(`<span class="system">Você entrou na sala: ${room}</span>`);
 };
 
-// Enviar mensagem texto
+// =================== SISTEMA DE CLÃ (BOTÕES) ===================
+createClanBtn.onclick = () => {
+  const clan = clanInput.value.trim();
+  if (!clan) return alert("Digite o nome do clã!");
+  socket.emit("createClan", clan);
+};
+
+joinClanBtn.onclick = () => {
+  const clan = clanInput.value.trim();
+  if (!clan) return alert("Digite o nome do clã!");
+  socket.emit("joinClan", clan);
+};
+
+leaveClanBtn.onclick = () => {
+  socket.emit("leaveClan");
+};
+
+listClansBtn.onclick = () => {
+  socket.emit("requestClans");
+};
+
+// =================== SISTEMA DE CLÃ (COMANDOS NO CHAT) ===================
+function handleClanCommands(text) {
+  if (text.startsWith("/criarlan ")) {
+    const clan = text.replace("/criarlan ", "").trim();
+    socket.emit("createClan", clan);
+    return true;
+  }
+
+  if (text.startsWith("/entrarclan ")) {
+    const clan = text.replace("/entrarclan ", "").trim();
+    socket.emit("joinClan", clan);
+    return true;
+  }
+
+  if (text === "/sairclan") {
+    socket.emit("leaveClan");
+    return true;
+  }
+
+  if (text === "/verclans") {
+    socket.emit("requestClans");
+    return true;
+  }
+
+  if (text === "/meucla") {
+    socket.emit("myClan");
+    return true;
+  }
+
+  return false;
+}
+
+// =================== ENVIO TEXTO ===================
 function sendMessage() {
   const text = cmdInput.value.trim();
   if (!text) return;
+
+  if (handleClanCommands(text)) {
+    cmdInput.value = "";
+    return;
+  }
 
   socket.emit("terminalInput", {
     text,
@@ -133,7 +200,7 @@ cmdInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendMessage();
 });
 
-// Função para enviar arquivos
+// =================== ENVIO DE ARQUIVOS ===================
 function sendFile(file, metaType) {
   const reader = new FileReader();
 
@@ -150,7 +217,7 @@ function sendFile(file, metaType) {
   reader.readAsDataURL(file);
 }
 
-// Botões de upload
+// =================== BOTÕES DE UPLOAD ===================
 imgBtn.onclick = () => imageInput.click();
 audioBtn.onclick = () => audioInput.click();
 videoBtn.onclick = () => videoInput.click();
@@ -170,7 +237,7 @@ videoInput.onchange = () => {
   if (file) sendFile(file, "video");
 };
 
-// Receber mensagens
+// =================== RECEBENDO MENSAGENS ===================
 socket.on("broadcastInput", ({ from, payload }) => {
   const name = payload.username || from;
 
@@ -194,7 +261,32 @@ socket.on("broadcastInput", ({ from, payload }) => {
   }
 });
 
-// Mensagens do sistema
+// =================== CLÃ: respostas do server ===================
+socket.on("clanList", (clans) => {
+  clanInfoDiv.innerHTML = "<b>Clãs disponíveis:</b><br>";
+
+  const entries = Object.keys(clans);
+
+  if (entries.length === 0) {
+    clanInfoDiv.innerHTML += "Nenhum clã criado ainda.";
+    addMessage("<span class='system'>Nenhum clã criado ainda.</span>");
+    return;
+  }
+
+  entries.forEach(clan => {
+    const members = clans[clan].members.length;
+    const line = `• ${clan} (${members} membros)`;
+    clanInfoDiv.innerHTML += line + "<br>";
+    addMessage(`<span class="system">${line}</span>`);
+  });
+});
+
+socket.on("clanInfo", (msg) => {
+  clanInfoDiv.innerHTML = msg;
+  addMessage(`<span class="system">${msg}</span>`);
+});
+
+// =================== MENSAGENS DO SISTEMA ===================
 socket.on("system", (msg) => {
   addMessage(`<span class="system">${msg}</span>`);
 });
