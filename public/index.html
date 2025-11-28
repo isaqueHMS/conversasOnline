@@ -3,63 +3,219 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mini-Term (multiplayer)</title>
-
-  <link rel="stylesheet" href="style.css">
+  <title>Mini-Term (Multiplayer)</title>
+  
+  <!-- Link para o CSS (v=6 para garantir atualização) -->
+  <link rel="stylesheet" href="style.css?v=6">
+  
+  <!-- Socket.io -->
   <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 
+  <!-- ================= LADO ESQUERDO: CHAT PÚBLICO ================= -->
   <div id="app">
-
+    <h3>📡 Terminal Público</h3>
+    
+    <!-- Toolbar -->
     <div id="toolbar">
       <input id="roomInput" type="text" placeholder="Nome da sala">
       <button id="joinBtn">Entrar</button>
-
-      <input id="nameInput" type="text" placeholder="Seu nome">
-      <button id="saveNameBtn">Salvar nome</button>
+      <input id="nameInput" type="text" placeholder="Seu apelido">
+      <button id="saveNameBtn">Salvar</button>
     </div>
 
-    <!-- PAINEL DE CLÃS -->
-    <div id="clanPanel">
-      <input id="clanInput" type="text" placeholder="Nome do clã">
-      <button id="createClanBtn">Criar clã</button>
-      <button id="joinClanBtn">Entrar no clã</button>
-      <button id="leaveClanBtn">Sair do clã</button>
-      <button id="listClansBtn">Ver clãs</button>
-
-      <div id="clanInfo" aria-live="polite"></div>
+    <!-- Área do Chat -->
+    <div id="chatsContainer">
+      <div id="terminal" class="chatBox"></div>
+      
+      <!-- Controles -->
+      <div id="controls">
+        <input id="cmdInput" type="text" placeholder="Digite sua mensagem...">
+        <button id="sendBtn">Enviar</button>
+      </div>
     </div>
 
-    <div id="terminal" tabindex="0"></div>
-
-    <div id="controls">
-      <input id="cmdInput" type="text" placeholder="Digite e pressione Enter">
-      <button id="sendBtn">Enviar</button>
-    </div>
-
+    <!-- Barra de Mídia -->
     <div id="mediaBar">
-      <button id="imgBtn">Enviar imagem</button>
-      <button id="audioBtn">Enviar áudio</button>
-      <button id="videoBtn">Enviar vídeo</button>
-
+      <button id="imgBtn">📷 Imagem</button>
+      <button id="audioBtn">🎤 Áudio</button>
+      <button id="videoBtn">🎥 Vídeo</button>
+      
       <input type="file" id="imageInput" accept="image/*" hidden>
       <input type="file" id="audioInput" accept="audio/*" hidden>
       <input type="file" id="videoInput" accept="video/*" hidden>
     </div>
 
-    <!-- Barra de progresso -->
+    <!-- Barra de Progresso -->
     <div id="progressWrapper">
       <div id="progressBar"></div>
     </div>
-
   </div>
 
-  <!-- Modal de preview de imagem -->
-  <div id="imagePreviewModal" role="dialog" aria-hidden="true">
-    <img id="previewImage" alt="Pré-visualização da imagem">
+  <!-- ================= LADO DIREITO: SISTEMA DE CLÃS ================= -->
+  <div id="clansScreen">
+    
+    <!-- Menu de Navegação -->
+    <div class="clan-tabs">
+      <button class="tab-btn active" onclick="openTab('tab-home')">🏠 Início</button>
+      <button class="tab-btn" onclick="openTab('tab-members')">👥 Membros</button>
+      <button class="tab-btn" onclick="openTab('tab-admin')">⚙️ Gestão</button>
+      <button class="tab-btn" onclick="openTab('tab-rank')">🏆 Ranking</button>
+    </div>
+
+    <!-- 1. INÍCIO -->
+    <div id="tab-home" class="tab-content active">
+      <h4>Meu Status</h4>
+      <div id="clanInfo" class="info-box">Carregando...</div>
+      
+      <div class="group-box">
+        <label>Ações</label>
+        <div class="input-row"><input id="clanInput" type="text" placeholder="Nome do Clã..."></div>
+        <div class="btn-row">
+          <button id="createClanBtn" class="btn-green">Criar</button>
+          <button id="leaveClanBtn" class="btn-red">Sair</button>
+        </div>
+        <button id="listClansBtn" style="width:100%; margin-top:5px;">Ver Lista</button>
+      </div>
+      
+      <div class="group-box">
+        <label>Convites</label>
+        <div class="btn-row">
+          <button id="acceptInviteBtn" class="btn-green">Aceitar</button>
+          <button id="declineInviteBtn" class="btn-red">Recusar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. MEMBROS -->
+    <div id="tab-members" class="tab-content">
+      <h4>Membros (Max 50)</h4>
+      <div id="membersListDiv" class="scroll-area">
+        <div class="info-box">...</div>
+      </div>
+    </div>
+
+    <!-- 3. GESTÃO -->
+    <div id="tab-admin" class="tab-content">
+      <div class="scroll-area">
+        
+        <!-- ADMIN BÁSICO -->
+        <div class="group-box">
+          <h4>👮 Hierarquia</h4>
+          <div class="input-row">
+             <input id="inviteTargetInput" type="text" placeholder="Convidar usuário">
+             <button id="inviteBtn">Env</button>
+          </div>
+          <hr class="separator">
+          <input id="promoteTargetInput" type="text" placeholder="Nome do Alvo">
+          <div class="btn-row" style="margin-top:5px;">
+            <button id="promoteBtn" class="btn-blue">Promover ▲</button>
+            <button id="demoteBtn" class="btn-red">Rebaixar ▼</button>
+          </div>
+        </div>
+
+        <!-- ZONA DO DONO -->
+        <div class="group-box" style="border-color: #f59e0b;">
+          <h4 style="color:#f59e0b">👑 Zona do Dono</h4>
+          <input id="ownerTargetInput" type="text" placeholder="Alvo (Expulsar/Ban/Mute)">
+          <div class="btn-row" style="margin-top:5px;">
+             <button id="kickBtn" class="btn-red">Expulsar</button>
+             <button id="banBtn" style="background:#450a0a; border-color:red;">BANIR 🚫</button>
+          </div>
+          <button id="muteBtn" style="width:100%; margin-top:5px; background:#4b5563;">Silenciar/Desmutar 🔇</button>
+        </div>
+
+        <!-- GUERRA (MINIGAME HACKING) -->
+        <div class="group-box war-zone" id="warZonePanel">
+          <h4 style="color: #ef4444;">⚔️ Cyber Warfare</h4>
+          
+          <!-- Configuração -->
+          <div id="warConfigArea">
+            <input id="warTargetInput" type="text" placeholder="Nome do Clã Inimigo">
+            <button id="createWarBtn" class="btn-danger" style="width:100%; margin-top:5px;">DECLARAR GUERRA (60s)</button>
+          </div>
+
+          <hr class="separator">
+
+          <!-- Área do Jogo -->
+          <div id="warGameArea" style="display:none; text-align:center;">
+            
+            <div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:0.8rem;">
+              <span id="myClanScore" style="color:cyan">Nós: 0</span>
+              <span style="color:#666">VS</span>
+              <span id="enemyClanScore" style="color:red">Eles: 0</span>
+            </div>
+
+            <!-- Barra de Vida -->
+            <div class="war-progress-bg">
+              <div id="warProgressBar" class="war-progress-fill"></div>
+            </div>
+
+            <!-- Terminal de Hack -->
+            <div class="hack-terminal">
+              <div class="hack-screen">
+                <p>COMANDO DE ATAQUE:</p>
+                <h2 id="hackCodeDisplay">---</h2>
+              </div>
+              
+              <input id="hackInput" type="text" placeholder="Digite o código..." autocomplete="off">
+              <div id="hackFeedback" style="height:20px; font-size:0.8rem; margin-top:5px;"></div>
+            </div>
+            
+            <!-- Elementos Ocultos (Compatibilidade) -->
+            <select id="warSelect" style="display:none;"></select>
+            <button id="submitPointBtn" style="display:none;"></button>
+          </div>
+          
+          <div id="noWarMsg" style="text-align:center; padding:10px; color:#555;">
+            Nenhuma guerra ativa.
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 4. RANKING -->
+    <div id="tab-rank" class="tab-content">
+      <h4>Top Clãs</h4>
+      <button id="requestRankingBtn" style="width:100%;">Atualizar</button>
+      <div id="rankingDiv" class="ranking-list"></div>
+    </div>
+
+    <!-- RODAPÉ CHAT -->
+    <div class="clan-chat-footer">
+      <h4>💬 Chat</h4>
+      <div id="clanChatDiv" class="chatBox small-chat"></div>
+      <div class="chat-input-area">
+        <input id="clanChatInput" type="text" placeholder="Msg...">
+        <button id="clanChatSendBtn">Env</button>
+      </div>
+    </div>
   </div>
 
+  <!-- MODAL DE PREVIEW -->
+  <div id="imagePreviewModal" style="display:none;">
+    <img id="previewImage" src="">
+  </div>
+
+  <!-- SCRIPTS -->
+  <script>
+    function openTab(id) {
+      Array.from(document.getElementsByClassName("tab-content")).forEach(e => e.style.display = "none");
+      Array.from(document.getElementsByClassName("tab-btn")).forEach(e => e.classList.remove("active"));
+      
+      const selected = document.getElementById(id);
+      if(selected) selected.style.display = "flex";
+      
+      const btns = document.getElementsByClassName("tab-btn");
+      if(id.includes("home")) btns[0].classList.add("active");
+      if(id.includes("members")) btns[1].classList.add("active");
+      if(id.includes("admin")) btns[2].classList.add("active");
+      if(id.includes("rank")) btns[3].classList.add("active");
+    }
+  </script>
+  
   <script src="client.js"></script>
 </body>
 </html>
