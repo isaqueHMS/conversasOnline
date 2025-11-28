@@ -6,7 +6,7 @@ const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  maxHttpBufferSize: 1e8 // 100MB
+  maxHttpBufferSize: 1e8
 });
 
 app.use(express.static("public"));
@@ -18,20 +18,28 @@ const FILE_LIMITS = {
   video: 50_000_000
 };
 
+// =================== ADMIN ===================
+const ADMIN_PASSWORD = "isaquinho";
+const admins = new Set();
+const bannedUsers = new Set();
+const blockedUsers = new Set();
+
 // =================== SISTEMA DE CLÃS ===================
-const clans = {}; 
-// Estrutura:
-// clans = {
-//   nomeClan: {
-//     owner: socket.id,
-//     members: [socket.id]
-//   }
-// }
+const clans = {};
 
 function getClanOfUser(socketId) {
   for (let clanName in clans) {
     if (clans[clanName].members.includes(socketId)) {
       return clanName;
+    }
+  }
+  return null;
+}
+
+function getSocketByUsername(username) {
+  for (let [id, socket] of io.of("/").sockets) {
+    if (socket.username === username) {
+      return socket;
     }
   }
   return null;
@@ -43,11 +51,10 @@ io.on("connection", (socket) => {
 
   socket.username = "Anônimo";
   socket.room = null;
+  socket.isAdmin = false;
 
   // =================== SALAS ===================
   socket.on("joinRoom", (room) => {
-    if (!room || typeof room !== "string") return;
-
     socket.join(room);
     socket.room = room;
 
@@ -69,7 +76,7 @@ io.on("connection", (socket) => {
       members: [socket.id]
     };
 
-    socket.emit("clanInfo", `Clã "${clanName}" criado com sucesso!`);
+    socket.emit("clanInfo", `Clã "${clanName}" criado!`);
   });
 
   socket.on("joinClan", (clanName) => {
@@ -80,7 +87,7 @@ io.on("connection", (socket) => {
 
     const currentClan = getClanOfUser(socket.id);
     if (currentClan) {
-      socket.emit("clanInfo", `Você já está no clã ${currentClan}. Saia primeiro.`);
+      socket.emit("clanInfo", `Você já está no clã ${currentClan}.`);
       return;
     }
 
@@ -90,100 +97,141 @@ io.on("connection", (socket) => {
 
   socket.on("leaveClan", () => {
     const clanName = getClanOfUser(socket.id);
+    if (!clanName) return;
 
-    if (!clanName) {
-      socket.emit("clanInfo", "Você não está em nenhum clã.");
-      return;
-    }
+    clans[clanName].members =
+      clans[clanName].members.filter(id => id !== socket.id);
 
-    const clan = clans[clanName];
-    clan.members = clan.members.filter(id => id !== socket.id);
-
-    socket.emit("clanInfo", `Você saiu do clã ${clanName}.`);
-
-    // Se o clã ficar vazio, apaga
-    if (clan.members.length === 0) {
+    if (clans[clanName].members.length === 0) {
       delete clans[clanName];
-      console.log("Clã removido:", clanName);
-    }
-  });
-
-  socket.on("requestClans", () => {
-    socket.emit("clanList", clans);
-  });
-
-  socket.on("myClan", () => {
-    const clan = getClanOfUser(socket.id);
-
-    if (!clan) {
-      socket.emit("clanInfo", "Você não está em nenhum clã.");
-      return;
     }
 
-    const membersCount = clans[clan].members.length;
-    socket.emit("clanInfo", `Seu clã: ${clan} (${membersCount} membros)`);
+    socket.emit("clanInfo", `Você saiu do clã ${clanName}`);
   });
 
-  // =================== CHAT E MIDIA ===================
+  // =================== CHAT + COMANDOS ===================
   socket.on("terminalInput", (payload) => {
     if (!socket.room) return;
-    if (!payload || typeof payload !== "object") return;
+    if (!payload || payload.meta !== "text") return;
 
-    if (payload.username && typeof payload.username === "string") {
+    const msg = payload.text.trim();
+
+    if (payload.username) {
       socket.username = payload.username.slice(0, 25);
     }
 
-    if (payload.meta === "text") {
-      if (!payload.text || typeof payload.text !== "string") return;
-      if (payload.text.length > 1000) return;
-
-      io.to(socket.room).emit("broadcastInput", {
-        from: socket.id,
-        payload: {
-          meta: "text",
-          text: payload.text,
-          username: socket.username
-        }
-      });
+    // =================== SISTEMA DE BAN ===================
+    if (bannedUsers.has(socket.username)) {
+      socket.emit("system", "Você foi banido do chat.");
+      return;
     }
 
-    if (["image", "audio", "video"].includes(payload.meta)) {
-      if (!payload.data || typeof payload.data !== "string") return;
+    if (blockedUsers.has(socket.username)) {
+      socket.emit("system", "Você está mutado.");
+      return;
+    }
 
-      const size = payload.data.length;
-      const maxSize = FILE_LIMITS[payload.meta];
+    // =================== COMANDOS ===================
+    if (msg.startsWith("/")) {
+      const args = msg.split(" ");
+      const command = args[0].toLowerCase();
 
-      if (size > maxSize) {
-        socket.emit("system", `Arquivo muito grande para ${payload.meta}`);
+      // VIRAR ADMIN
+      if (command === "/admin") {
+        if (args[1] === ADMIN_PASSWORD) {
+          socket.isAdmin = true;
+          admins.add(socket.username);
+          socket.emit("system", "Você agora é ADMIN.");
+        } else {
+          socket.emit("system", "Senha incorreta.");
+        }
         return;
       }
 
-      io.to(socket.room).emit("broadcastInput", {
-        from: socket.id,
-        payload: {
-          meta: payload.meta,
-          data: payload.data,
-          username: socket.username
+      if (!socket.isAdmin) {
+        socket.emit("system", "Você não é admin.");
+        return;
+      }
+
+      // BAN
+      if (command === "/ban") {
+        const targetName = args[1];
+        bannedUsers.add(targetName);
+
+        const targetSocket = getSocketByUsername(targetName);
+        if (targetSocket) {
+          targetSocket.emit("system", "Você foi banido do chat.");
         }
-      });
+
+        io.to(socket.room).emit("system", `${targetName} foi banido.`);
+        return;
+      }
+
+      // BLOCK (mute)
+      if (command === "/block") {
+        const targetName = args[1];
+        blockedUsers.add(targetName);
+
+        const targetSocket = getSocketByUsername(targetName);
+        if (targetSocket) targetSocket.emit("system", "Você foi mutado.");
+
+        io.to(socket.room).emit("system", `${targetName} foi mutado.`);
+        return;
+      }
+
+      // UNBLOCK
+      if (command === "/unblock") {
+        const targetName = args[1];
+        blockedUsers.delete(targetName);
+        io.to(socket.room).emit("system", `${targetName} foi desmutado.`);
+        return;
+      }
+
+      // KICK
+      if (command === "/kick") {
+        const targetName = args[1];
+        const targetSocket = getSocketByUsername(targetName);
+
+        if (targetSocket && targetSocket.room) {
+          targetSocket.leave(targetSocket.room);
+          targetSocket.emit("system", "Você foi expulso da sala.");
+        }
+
+        io.to(socket.room).emit("system", `${targetName} foi expulso.`);
+        return;
+      }
+
+      // LISTA DE ADMINS
+      if (command === "/admins") {
+        socket.emit("system", "Admins: " + [...admins].join(", "));
+        return;
+      }
+
+      return;
     }
+
+    // =================== ENVIA MENSAGEM NORMAL ===================
+    io.to(socket.room).emit("broadcastInput", {
+      from: socket.id,
+      payload: {
+        meta: "text",
+        text: msg,
+        username: socket.username,
+        admin: socket.isAdmin
+      }
+    });
   });
 
   // =================== DISCONNECT ===================
   socket.on("disconnect", () => {
     const clanName = getClanOfUser(socket.id);
-
     if (clanName) {
-      clans[clanName].members = clans[clanName].members.filter(id => id !== socket.id);
+      clans[clanName].members =
+        clans[clanName].members.filter(id => id !== socket.id);
 
       if (clans[clanName].members.length === 0) {
         delete clans[clanName];
-        console.log("Clã removido:", clanName);
       }
-    }
-
-    if (socket.room) {
-      socket.to(socket.room).emit("system", `${socket.username} saiu da sala`);
     }
   });
 });
