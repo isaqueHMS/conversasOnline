@@ -382,3 +382,27 @@ socket.on("ranking", (list) => {
          </div>`
     ).join("");
 });
+// --- CORREÇÃO DE CONVITES ---
+socket.on("clanInviteReceived", (data) => {
+    // 1. Toca um alerta visual
+    addMessage(`📩 <b>CONVITE:</b> O clã <span style="color:yellow">${data.clanName}</span> te convidou!`, "system");
+    alert(`Você recebeu um convite do clã: ${data.clanName}\nO nome foi preenchido automaticamente na aba Início.`);
+
+    // 2. Preenche o campo automaticamente para o botão "Aceitar" funcionar
+    if(clanInput) {
+        clanInput.value = data.clanName;
+    }
+
+    // 3. Muda para a aba de início para facilitar
+    openTab('tab-home');
+    
+    // 4. Faz o botão de aceitar piscar (efeito visual opcional)
+    if(acceptInviteBtn) {
+        acceptInviteBtn.style.background = "#10b981"; // Verde forte
+        acceptInviteBtn.innerText = "ACEITAR AGORA";
+        setTimeout(() => {
+            acceptInviteBtn.style.background = ""; 
+            acceptInviteBtn.innerText = "Aceitar";
+        }, 5000);
+    }
+});

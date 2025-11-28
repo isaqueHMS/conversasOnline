@@ -186,17 +186,34 @@ io.on("connection", (socket) => {
     io.emit("clanList", {}); // Força atualização da lista geral (simplificado)
   });
 
-  socket.on("inviteToClan", (targetUser) => {
-    const clanName = getClanOfUser(socket.id);
-    if (!clanName) return;
-    const targetSocket = getSocketByUsername(targetUser);
-    if (!targetSocket) return socket.emit("clanInfo", "Usuário não encontrado.");
+socket.on("inviteToClan", (target) => {
+    const cName = getClanOfUser(socket.id);
+    if (!cName) return socket.emit("clanInfo", "Você não tem clã.");
     
-    invitations.set(clanName, invitations.get(clanName) || new Set());
-    invitations.get(clanName).add(targetSocket.id);
+    const c = clans[cName];
+    // Verifica permissão (Dono, Admin ou Co-Admin)
+    if (c.owner !== socket.id && !c.admins.has(socket.id) && !c.coAdmins.has(socket.id)) 
+        return socket.emit("clanInfo", "Sem permissão para convidar.");
+
+    // Tenta achar o usuário (O NOME TEM QUE SER EXATO)
+    const tSocket = getSocketByUsername(target);
     
-    targetSocket.emit("clanInfo", `Convite recebido para o clã: ${clanName}`);
-    socket.emit("clanInfo", `Convite enviado para ${targetUser}`);
+    if (!tSocket) return socket.emit("clanInfo", "Usuário não encontrado ou offline.");
+    if (c.banned.has(tSocket.username) || c.banned.has(tSocket.id)) return socket.emit("clanInfo", "Este usuário está banido.");
+    
+    // Verifica limite
+    const total = 1 + c.admins.size + c.coAdmins.size + c.members.size;
+    if(total >= LIMITS.members) return socket.emit("clanInfo", "Clã cheio.");
+
+    // Salva o convite
+    invitations.set(cName, invitations.get(cName) || new Set());
+    invitations.get(cName).add(tSocket.id);
+
+    // --- AQUI ESTA A CORREÇÃO ---
+    // Envia um evento especial com o NOME DO CLÃ para o alvo
+    tSocket.emit("clanInviteReceived", { clanName: cName, from: socket.username });
+    
+    socket.emit("clanInfo", `Convite enviado para ${target}.`);
   });
 
   socket.on("acceptInvite", (clanName) => {
