@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mini-Term (multiplayer)</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <div id="app">
+    <div id="toolbar">
+      <input id="roomInput" placeholder="nome da sala" />
+      <button id="joinBtn">Entrar</button>
+    </div>
+
+    <div id="terminal" tabindex="0"></div>
+
+    <div id="controls">
+      <input id="cmdInput" placeholder="Digite algo e pressione Enter" />
+      <button id="sendBtn">Enviar</button>
+    </div>
+  </div>
+
+  <script src="client.js"></script>
+</body>
+</html>

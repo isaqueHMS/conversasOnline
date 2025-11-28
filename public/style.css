@@ -1,0 +1,47 @@
+/* estilo simples tipo terminal */
+:root{
+  --bg: #0b1020;
+  --text: #d6e6ff;
+  --accent: #39ff14;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(180deg,#02030a,#071226);
+  color:var(--text);
+  font-family: "Segoe UI", Roboto, monospace;
+}
+#app{
+  width:900px;
+  max-width:95%;
+  background:rgba(0,0,0,0.45);
+  border-radius:8px;
+  box-shadow:0 10px 30px rgba(0,0,0,0.6);
+  padding:14px;
+}
+#toolbar{display:flex;gap:8px;margin-bottom:10px}
+#roomInput{flex:1;padding:8px;border-radius:6px;border:1px solid #223;}
+#joinBtn{padding:8px 12px;border-radius:6px;background:#122a1a;color:var(--text);cursor:pointer}
+
+#terminal{
+  height:420px;
+  background:var(--bg);
+  border-radius:6px;
+  padding:12px;
+  overflow:auto;
+  font-family: monospace;
+  line-height:1.4;
+  border:1px solid #121212;
+}
+.line { white-space:pre-wrap; font-size:14px; }
+
+#controls{display:flex;gap:8px;margin-top:10px}
+#cmdInput{flex:1;padding:10px;border-radius:6px;background:#071227;border:1px solid #233;color:var(--text)}
+#sendBtn{padding:10px 14px;border-radius:6px;background:#0b2b3b;color:var(--text);cursor:pointer}
+.system { color:#9aa7c7; font-style:italic; }
+.you { color:var(--accent); }
+.other { color:#9fefc1; }
