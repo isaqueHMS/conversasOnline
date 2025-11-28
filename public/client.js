@@ -11,21 +11,30 @@ const audioBtn = document.getElementById("audioBtn");
 const imageInput = document.getElementById("imageInput");
 const audioInput = document.getElementById("audioInput");
 
-// Função pra adicionar mensagens no terminal
+// Area de nome
+const nameInput = document.getElementById("nameInput");
+const saveNameBtn = document.getElementById("saveNameBtn");
+
+// Nome do usuário
+let username = localStorage.getItem("username") || "Anônimo";
+
+// Se já tem nome salvo, coloca no input
+if (nameInput) {
+  nameInput.value = username;
+}
+
+// Função pra adicionar mensagens
 function addMessage(content, type = "text") {
   const msg = document.createElement("div");
   msg.classList.add("message");
 
   if (type === "text") {
-    msg.textContent = content;
+    msg.innerHTML = content;
   }
 
   if (type === "image") {
     const img = document.createElement("img");
     img.src = content;
-    img.style.maxWidth = "250px";
-    img.style.display = "block";
-    img.style.marginTop = "5px";
     msg.appendChild(img);
   }
 
@@ -33,8 +42,6 @@ function addMessage(content, type = "text") {
     const audio = document.createElement("audio");
     audio.src = content;
     audio.controls = true;
-    audio.style.display = "block";
-    audio.style.marginTop = "5px";
     msg.appendChild(audio);
   }
 
@@ -42,41 +49,58 @@ function addMessage(content, type = "text") {
   terminal.scrollTop = terminal.scrollHeight;
 }
 
+// Salvar / trocar nome
+saveNameBtn.onclick = () => {
+  const newName = nameInput.value.trim();
+
+  if (newName.length < 2) {
+    alert("Nome muito curto.");
+    return;
+  }
+
+  username = newName;
+  localStorage.setItem("username", username);
+
+  addMessage(`<span class="system">Seu nome agora é ${username}</span>`);
+};
+
 // Entrar na sala
 joinBtn.onclick = () => {
   const room = roomInput.value.trim();
-  if (!room) return alert("Digite o nome da sala!");
+  if (!room) {
+    alert("Digite o nome da sala!");
+    return;
+  }
 
-  socket.emit("join", room);
-  addMessage(`Conectado à sala: ${room}`);
+  socket.emit("joinRoom", room);
+  addMessage(`<span class="system">Você entrou na sala: ${room}</span>`);
 };
 
-// Enviar mensagem de texto
+// Enviar mensagem
 function sendMessage() {
   const text = cmdInput.value.trim();
   if (!text) return;
 
-  socket.emit("message", text);
+  socket.emit("terminalInput", {
+    text: text,
+    username: username,
+    meta: "text"
+  });
+
   cmdInput.value = "";
 }
 
+// Clique no botão
 sendBtn.onclick = sendMessage;
 
+// Enter no input
 cmdInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendMessage();
 });
 
-// BOTÕES DE UPLOAD
+// Enviar imagem
+imgBtn.onclick = () => imageInput.click();
 
-imgBtn.onclick = () => {
-  imageInput.click();
-};
-
-audioBtn.onclick = () => {
-  audioInput.click();
-};
-
-// Envio de imagem
 imageInput.onchange = () => {
   const file = imageInput.files[0];
   if (!file) return;
@@ -84,16 +108,20 @@ imageInput.onchange = () => {
   const reader = new FileReader();
 
   reader.onload = () => {
-    socket.emit("file", {
+    socket.emit("terminalInput", {
+      meta: "image",
       type: "image",
-      data: reader.result
+      data: reader.result,
+      username: username
     });
   };
 
   reader.readAsDataURL(file);
 };
 
-// Envio de áudio
+// Enviar áudio
+audioBtn.onclick = () => audioInput.click();
+
 audioInput.onchange = () => {
   const file = audioInput.files[0];
   if (!file) return;
@@ -101,9 +129,11 @@ audioInput.onchange = () => {
   const reader = new FileReader();
 
   reader.onload = () => {
-    socket.emit("file", {
+    socket.emit("terminalInput", {
+      meta: "audio",
       type: "audio",
-      data: reader.result
+      data: reader.result,
+      username: username
     });
   };
 
@@ -111,11 +141,26 @@ audioInput.onchange = () => {
 };
 
 // Receber mensagens
-socket.on("message", (msg) => {
-  addMessage(msg, "text");
+socket.on("broadcastInput", ({ from, payload }) => {
+
+  const name = payload.username || from;
+
+  if (payload.meta === "text") {
+    addMessage(`<b>${name}:</b> ${payload.text}`, "text");
+  }
+
+  if (payload.meta === "image") {
+    addMessage(`<b>${name}:</b>`, "text");
+    addMessage(payload.data, "image");
+  }
+
+  if (payload.meta === "audio") {
+    addMessage(`<b>${name}:</b>`, "text");
+    addMessage(payload.data, "audio");
+  }
 });
 
-// Receber arquivos
-socket.on("file", (file) => {
-  addMessage(file.data, file.type);
+// Mensagens do sistema
+socket.on("system", (msg) => {
+  addMessage(`<span class="system">${msg}</span>`);
 });

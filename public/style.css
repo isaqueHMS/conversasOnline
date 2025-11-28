@@ -45,3 +45,62 @@ body{
 .system { color:#9aa7c7; font-style:italic; }
 .you { color:var(--accent); }
 .other { color:#9fefc1; }
+#nameInput {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #223;
+  background: #071227;
+  color: var(--text);
+}
+
+#saveNameBtn {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #102b1f;
+  color: var(--text);
+  cursor: pointer;
+  border: 1px solid #224;
+}
+
+#saveNameBtn:hover {
+  background: #154d34;
+}
+#mediaBar {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#mediaBar button {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #051a22;
+  color: var(--text);
+  cursor: pointer;
+  border: 1px solid #233;
+}
+
+#mediaBar button:hover {
+  background: #083044;
+}
+.message {
+  margin-bottom: 10px;
+  padding: 6px 4px;
+  border-bottom: 1px solid #122;
+}
+
+.message b {
+  color: var(--accent);
+}
+
+.message img {
+  max-width: 250px;
+  border-radius: 4px;
+  margin-top: 5px;
+  border: 1px solid #233;
+}
+
+.message audio {
+  margin-top: 5px;
+  width: 250px;
+}
