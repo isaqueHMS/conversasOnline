@@ -1,5 +1,5 @@
-// client.js - versão completa com melhorias no sistema de voz (mute local, nomes, menu por usuário, kick)
-// Dependências: SimplePeer, socket.io (mesmo que já usava)
+// client.js - versão completa integrada e corrigida
+// Dependências: SimplePeer, socket.io
 
 const socket = io();
 
@@ -63,12 +63,25 @@ const warZonePanel = document.getElementById("warZonePanel");
 const requestRankingBtn = document.getElementById("requestRankingBtn");
 const rankingDiv = document.getElementById("rankingDiv");
 
+// Elements used by the war/minigame logic (were missing in original)
+const hackCodeDisplay = document.getElementById("hackCodeDisplay");
+const hackInput = document.getElementById("hackInput");
+const hackFeedback = document.getElementById("hackFeedback");
+const warConfigArea = document.getElementById("warConfigArea");
+const noWarMsg = document.getElementById("noWarMsg");
+const warGameArea = document.getElementById("warGameArea");
+const myClanScoreEl = document.getElementById("myClanScore");
+const enemyClanScoreEl = document.getElementById("enemyClanScore");
+const warProgressBar = document.getElementById("warProgressBar");
+const warSelect = document.getElementById("warSelect");
+const submitPointBtn = document.getElementById("submitPointBtn");
+
 // --- Clãs: Voz (WebRTC) ---
 const joinVoiceBtn = document.getElementById("joinVoiceBtn");
 const leaveVoiceBtn = document.getElementById("leaveVoiceBtn");
 const voiceStatus = document.getElementById("voiceStatus");
 const audioContainer = document.getElementById("audioContainer");
-const localMuteBtn = document.getElementById("localMuteBtn"); // botão adicional no HTML
+const localMuteBtn = document.getElementById("localMuteBtn"); // optional in HTML
 
 // =================== VARIÁVEIS GLOBAIS & BLOQUEIO DE NOME ===================
 
@@ -78,43 +91,51 @@ let currentCode = "";
 const HACK_CODES = ["ROOT", "SUDO", "HACK", "CODE", "BASH", "NANO", "PING", "DDOS", "VOID", "NULL", "JAVA", "NODE", "EXIT", "WIFI", "DATA"];
 
 let localStream = null;
-let peers = {}; // estrutura: peers[peerId] = { peer: SimplePeerInstance, name: "...", wrapperEl: ..., audioEl: ... }
-let isMuted = false; // mute do microfone local (tudo)
+let peers = {}; // peers[peerId] = { peer, name, wrapperEl, audioEl, pendingName }
+let isMuted = false; // local mute toggle
 let isVoiceJoined = false;
 
 // =================== Inicialização de nome ===================
 
 if (username) {
-    nameInput.value = username;
-    nameInput.disabled = true;
-    nameInput.style.opacity = "0.5";
-    saveNameBtn.style.display = "none";
+    if (nameInput) {
+        nameInput.value = username;
+        nameInput.disabled = true;
+        nameInput.style.opacity = "0.5";
+    }
+    if (saveNameBtn) saveNameBtn.style.display = "none";
     socket.emit("setUsername", username);
 } else {
     username = "Visitante-" + Math.floor(Math.random() * 1000);
-    nameInput.value = "";
-    nameInput.placeholder = "Escolha seu Nick (Definitivo!)";
+    if (nameInput) {
+        nameInput.value = "";
+        nameInput.placeholder = "Escolha seu Nick (Definitivo!)";
+    }
 }
 
-saveNameBtn.onclick = () => {
-    const newName = nameInput.value.trim();
-    if (!newName) return alert("Por favor, digite um nome.");
-    if (newName.length > 15) return alert("Nome muito longo! Máximo 15 letras.");
+if (saveNameBtn) {
+    saveNameBtn.onclick = () => {
+        const newName = nameInput.value.trim();
+        if (!newName) return alert("Por favor, digite um nome.");
+        if (newName.length > 15) return alert("Nome muito longo! Máximo 15 letras.");
 
-    username = newName;
-    localStorage.setItem("username", username);
-    socket.emit("setUsername", username);
-    addMessage(`Nome registrado permanentemente: ${username}`, "system");
+        username = newName;
+        localStorage.setItem("username", username);
+        socket.emit("setUsername", username);
+        addMessage(`Nome registrado permanentemente: ${username}`, "system");
 
-    nameInput.disabled = true;
-    nameInput.style.opacity = "0.5";
-    saveNameBtn.style.display = "none";
-};
+        nameInput.disabled = true;
+        nameInput.style.opacity = "0.5";
+        saveNameBtn.style.display = "none";
+    };
+}
 
-joinBtn.onclick = () => {
-    const room = roomInput.value.trim();
-    if (room) socket.emit("joinRoom", room);
-};
+if (joinBtn) {
+    joinBtn.onclick = () => {
+        const room = roomInput.value.trim();
+        if (room) socket.emit("joinRoom", room);
+    };
+}
 
 // =================== FUNÇÕES DE CHAT E MÍDIA ===================
 
@@ -128,7 +149,7 @@ function addMessage(content, type = "text", target = "public") {
     } else if (type === "image") {
         const img = document.createElement("img");
         img.src = content;
-        img.onclick = () => { previewImage.src = content; previewModal.style.display = "flex"; };
+        img.onclick = () => { if (previewImage) previewImage.src = content; if (previewModal) previewModal.style.display = "flex"; };
         msg.appendChild(img);
     } else if (type === "audio") {
         const audio = document.createElement("audio");
@@ -140,6 +161,8 @@ function addMessage(content, type = "text", target = "public") {
         video.src = content;
         video.controls = true;
         msg.appendChild(video);
+    } else {
+        msg.innerText = content;
     }
 
     const box = (target === "clan") ? clanChatDiv : terminal;
@@ -149,19 +172,26 @@ function addMessage(content, type = "text", target = "public") {
     }
 }
 
-sendBtn.onclick = () => {
-    const text = cmdInput.value.trim();
-    if (!text) return;
-    socket.emit("terminalInput", { text, meta: "text", username });
-    cmdInput.value = "";
-};
-cmdInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendBtn.click(); });
+// send message
+if (sendBtn) {
+    sendBtn.onclick = () => {
+        const text = cmdInput.value.trim();
+        if (!text) return;
+        socket.emit("terminalInput", { text, meta: "text", username });
+        cmdInput.value = "";
+    };
+}
+if (cmdInput) cmdInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendBtn.click(); });
 
+// handle broadcastInput robustly (fix name fallback)
 socket.on("broadcastInput", ({ from, payload }) => {
+    // payload might be undefined in some cases, guard
+    payload = payload || {};
+    const nome = payload.username || from || payload.name || "Alguém";
+
     if (payload.meta === "text") {
-        addMessage(`<b>${payload.username}:</b> ${payload.text}`);
+        addMessage(`<b>${nome}:</b> ${payload.text}`, "text");
     } else {
-        const nome = payload.username || "Alguém";
         addMessage(`<b>${nome} enviou:</b>`, "text");
         addMessage(payload.data, payload.meta);
     }
@@ -178,29 +208,29 @@ function sendFile(file, type) {
     reader.readAsDataURL(file);
 }
 
-imgBtn.onclick = () => imageInput.click();
-imageInput.onchange = () => { sendFile(imageInput.files[0], "image"); imageInput.value = ""; };
-audioBtn.onclick = () => audioInput.click();
-audioInput.onchange = () => { sendFile(audioInput.files[0], "audio"); audioInput.value = ""; };
-videoBtn.onclick = () => videoInput.click();
-videoInput.onchange = () => { sendFile(videoInput.files[0], "video"); videoInput.value = ""; };
-previewModal.onclick = () => previewModal.style.display = "none";
+if (imgBtn) imgBtn.onclick = () => imageInput.click();
+if (imageInput) imageInput.onchange = () => { sendFile(imageInput.files[0], "image"); imageInput.value = ""; };
+if (audioBtn) audioBtn.onclick = () => audioInput.click();
+if (audioInput) audioInput.onchange = () => { sendFile(audioInput.files[0], "audio"); audioInput.value = ""; };
+if (videoBtn) videoBtn.onclick = () => videoInput.click();
+if (videoInput) videoInput.onchange = () => { sendFile(videoInput.files[0], "video"); videoInput.value = ""; };
+if (previewModal) previewModal.onclick = () => previewModal.style.display = "none";
 
 // =================== CLÃS: GERAL E GUERRAS (mantive sua lógica) ===================
 
-createClanBtn.onclick = () => socket.emit("createClan", clanInput.value);
-leaveClanBtn.onclick = () => socket.emit("leaveClan");
-listClansBtn.onclick = () => socket.emit("requestClans");
-acceptInviteBtn.onclick = () => socket.emit("acceptInvite", clanInput.value);
-declineInviteBtn.onclick = () => socket.emit("declineInvite", clanInput.value);
+if (createClanBtn) createClanBtn.onclick = () => socket.emit("createClan", clanInput.value);
+if (leaveClanBtn) leaveClanBtn.onclick = () => socket.emit("leaveClan");
+if (listClansBtn) listClansBtn.onclick = () => socket.emit("requestClans");
+if (acceptInviteBtn) acceptInviteBtn.onclick = () => socket.emit("acceptInvite", clanInput.value);
+if (declineInviteBtn) declineInviteBtn.onclick = () => socket.emit("declineInvite", clanInput.value);
 
-inviteBtn.onclick = () => socket.emit("inviteToClan", inviteTargetInput.value);
-promoteBtn.onclick = () => socket.emit("promoteMember", promoteTargetInput.value);
-demoteBtn.onclick = () => socket.emit("demoteMember", promoteTargetInput.value);
+if (inviteBtn) inviteBtn.onclick = () => socket.emit("inviteToClan", inviteTargetInput.value);
+if (promoteBtn) promoteBtn.onclick = () => socket.emit("promoteMember", promoteTargetInput.value);
+if (demoteBtn) demoteBtn.onclick = () => socket.emit("demoteMember", promoteTargetInput.value);
 
-kickBtn.onclick = () => socket.emit("kickMember", ownerTargetInput.value);
-muteBtn.onclick = () => socket.emit("muteMember", ownerTargetInput.value);
-banBtn.onclick = () => {
+if (kickBtn) kickBtn.onclick = () => socket.emit("kickMember", ownerTargetInput.value);
+if (muteBtn) muteBtn.onclick = () => socket.emit("muteMember", ownerTargetInput.value);
+if (banBtn) banBtn.onclick = () => {
     if (confirm("Banir usuário permanentemente?")) socket.emit("banMember", ownerTargetInput.value);
 };
 
@@ -215,17 +245,22 @@ if (dissolveBtn) {
     };
 }
 
-clanChatSendBtn.onclick = () => {
-    const txt = clanChatInput.value.trim();
-    if (txt) {
-        socket.emit("clanMessage", txt);
-        clanChatInput.value = "";
-    }
-};
+if (clanChatSendBtn) {
+    clanChatSendBtn.onclick = () => {
+        const txt = clanChatInput.value.trim();
+        if (txt) {
+            socket.emit("clanMessage", txt);
+            clanChatInput.value = "";
+        }
+    };
+}
 
-socket.on("clanChat", ({ from, text }) => {
-    const nome = (from === username) ? "[Eu]" : from;
-    addMessage(`<b>${nome}:</b> ${text}`, "text", "clan");
+// clanChat - robust naming
+socket.on("clanChat", (data) => {
+    data = data || {};
+    const sender = data.from || data.username || "Alguém";
+    const nome = (sender === username) ? "[Eu]" : sender;
+    addMessage(`<b>${nome}:</b> ${data.text}`, "text", "clan");
 });
 
 socket.on("clanInfo", (msg) => addMessage(msg, "system"));
@@ -258,16 +293,18 @@ socket.on("clanUpdated", (data) => {
         membersListDiv.innerHTML = "";
         let myRole = "Membro";
         data.members.forEach(member => {
-            if (member.name === username) myRole = member.role;
+            // member can be { name, role, battles, muted }
+            const memberName = member.name || member.username || "Alguém";
+            if (memberName === username) myRole = member.role;
             const item = document.createElement("div");
             item.className = "member-item";
             const mutedIcon = member.muted ? "🔇" : "";
             item.innerHTML = `
                 <div class="member-info">
-                    <span class="member-name">${member.name} ${mutedIcon}</span>
+                    <span class="member-name">${memberName} ${mutedIcon}</span>
                     <span class="member-battles">⚔️ Batalhas: ${member.battles || 0}</span>
                 </div>
-                <span class="role-badge role-${member.role.replace(" ", "-")}">${member.role}</span>
+                <span class="role-badge role-${(member.role || "Membro").replace(" ", "-")}">${member.role || "Membro"}</span>
             `;
             membersListDiv.appendChild(item);
         });
@@ -283,18 +320,18 @@ socket.on("clanUpdated", (data) => {
     }
 });
 
-socket.on("clanList", (clans) => {
+socket.on("clanList", (clansData) => {
     let html = "<b>Clãs Disponíveis:</b><br>";
-    const list = Object.values(clans);
+    const list = Object.values(clansData || {});
     if (list.length === 0) html += "Nenhum clã criado.";
     list.forEach(c => {
-        const count = Array.isArray(c.members) ? c.members.length : 0;
+        const count = Array.isArray(c.members) ? c.members.length : (c.members ? c.members.length : 0);
         html += `• ${c.name} (Membros: ${count})<br>`;
     });
     if (clanInfoDiv) clanInfoDiv.innerHTML = html;
 });
 
-// =================== GUERRA E MINIGAME (mantive iguais) ===================
+// =================== GUERRA E MINIGAME ===================
 
 function generateCode() {
     const word = HACK_CODES[Math.floor(Math.random() * HACK_CODES.length)];
@@ -304,11 +341,13 @@ function generateCode() {
     if (hackInput) { hackInput.value = ""; hackInput.focus(); }
 }
 
-createWarBtn.onclick = () => {
-    const target = warTargetInput.value.trim();
-    if (!target) return alert("Digite o nome do clã inimigo!");
-    socket.emit("createWar", { targetClan: target, durationSec: 60 });
-};
+if (createWarBtn) {
+    createWarBtn.onclick = () => {
+        const target = warTargetInput.value.trim();
+        if (!target) return alert("Digite o nome do clã inimigo!");
+        socket.emit("createWar", { targetClan: target, durationSec: 60 });
+    };
+}
 
 if (hackInput) {
     hackInput.addEventListener("input", () => {
@@ -316,17 +355,26 @@ if (hackInput) {
         if (val === currentCode) {
             if (!currentWarId) return;
             socket.emit("submitWarPoint", { warId: currentWarId, points: 15 });
-            hackFeedback.style.color = "#0f0";
-            hackFeedback.innerText = ">> DADOS ENVIADOS <<";
-            document.querySelector(".hack-terminal").classList.add("success-flash");
-            setTimeout(() => document.querySelector(".hack-terminal").classList.remove("success-flash"), 200);
+            if (hackFeedback) {
+                hackFeedback.style.color = "#0f0";
+                hackFeedback.innerText = ">> DADOS ENVIADOS <<";
+            }
+            const hackTerm = document.querySelector(".hack-terminal");
+            if (hackTerm) hackTerm.classList.add("success-flash");
+            setTimeout(() => {
+                if (hackTerm) hackTerm.classList.remove("success-flash");
+            }, 200);
             generateCode();
         } else if (!currentCode.startsWith(val)) {
-            hackFeedback.style.color = "red";
-            hackFeedback.innerText = "ERRO DE SINTAXE";
-            hackInput.classList.add("shake");
-            setTimeout(() => hackInput.classList.remove("shake"), 300);
-            hackInput.value = "";
+            if (hackFeedback) {
+                hackFeedback.style.color = "red";
+                hackFeedback.innerText = "ERRO DE SINTAXE";
+            }
+            if (hackInput) {
+                hackInput.classList.add("shake");
+                setTimeout(() => hackInput.classList.remove("shake"), 300);
+                hackInput.value = "";
+            }
         }
     });
 }
@@ -352,17 +400,22 @@ socket.on("warCreated", (info) => {
 });
 
 socket.on("warUpdated", (data) => {
-    const clans = Object.keys(data.scores);
-    if (clans.length >= 2 && myClanScoreEl && enemyClanScoreEl) {
-        myClanScoreEl.innerText = `${clans[0]}: ${data.scores[clans[0]]}`;
-        enemyClanScoreEl.innerText = `${clans[1]}: ${data.scores[clans[1]]}`;
-        const total = data.scores[clans[0]] + data.scores[clans[1]];
-        if (total > 0 && warProgressBar) {
-            const pct = (data.scores[clans[0]] / total) * 100;
+    if (!data || !data.scores) return;
+    const clansKeys = Object.keys(data.scores);
+    if (clansKeys.length >= 2 && myClanScoreEl && enemyClanScoreEl && warProgressBar) {
+        const clanA = clansKeys[0];
+        const clanB = clansKeys[1];
+        myClanScoreEl.innerText = `${clanA}: ${data.scores[clanA]}`;
+        enemyClanScoreEl.innerText = `${clanB}: ${data.scores[clanB]}`;
+        const total = (data.scores[clanA] || 0) + (data.scores[clanB] || 0);
+        if (total > 0) {
+            const pct = ((data.scores[clanA] || 0) / total) * 100;
             warProgressBar.style.width = pct + "%";
+        } else {
+            warProgressBar.style.width = "0%";
         }
     }
-    if (!currentWarId) { currentWarId = data.warId; startMinigame(data.warId); }
+    if (!currentWarId && data.warId) { currentWarId = data.warId; startMinigame(data.warId); }
 });
 
 socket.on("warEnded", (res) => {
@@ -370,23 +423,30 @@ socket.on("warEnded", (res) => {
     endMinigame();
 });
 
-requestRankingBtn.onclick = () => socket.emit("requestRanking");
+if (requestRankingBtn) {
+    requestRankingBtn.onclick = () => socket.emit("requestRanking");
+}
 socket.on("ranking", (list) => {
-    rankingDiv.innerHTML = list.map((c, i) =>
+    rankingDiv.innerHTML = (list || []).map((c, i) =>
         `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #333; padding:4px;">
             <span>#${i + 1} <b>${c.name}</b></span>
-            <span>${c.points} pts</span>
+            <span>${c.points || 0} pts</span>
          </div>`
     ).join("");
 });
 
-// =================== SISTEMA DE VOZ (WEBRTC) - REESCRITO E APRIMORADO ===================
+// =================== SISTEMA DE VOZ (WEBRTC) ===================
 
 // Helper para criar SimplePeer iniciador
 function createPeer(userToSignal, callerID, stream) {
     const peer = new SimplePeer({ initiator: true, trickle: false, stream: stream });
     peer.on("signal", signal => socket.emit("sendingSignal", { userToSignal, callerID, signal }));
-    peer.on("stream", stream => addAudioElement(userToSignal, stream));
+    peer.on("stream", stream => {
+        // When we receive stream from a peer, we create its audio DOM and use pendingName if exists
+        const name = peers[userToSignal] && peers[userToSignal].pendingName ? peers[userToSignal].pendingName : (peers[userToSignal] && peers[userToSignal].name) || "Alguém";
+        addAudioElement(userToSignal, stream, name);
+    });
+    peer.on("error", err => console.warn("Peer error:", err));
     return peer;
 }
 
@@ -395,14 +455,26 @@ function addPeer(incomingSignal, callerID, stream) {
     const peer = new SimplePeer({ initiator: false, trickle: false, stream: stream });
     peer.on("signal", signal => socket.emit("returningSignal", { signal, callerID }));
     peer.signal(incomingSignal);
-    peer.on("stream", stream => addAudioElement(callerID, stream));
+    peer.on("stream", stream => {
+        const name = peers[callerID] && peers[callerID].pendingName ? peers[callerID].pendingName : (peers[callerID] && peers[callerID].name) || "Alguém";
+        addAudioElement(callerID, stream, name);
+    });
+    peer.on("error", err => console.warn("Peer error:", err));
     return peer;
 }
 
 // Cria a UI do usuário na call: bolinha + nome + menu
 function addAudioElement(id, stream, name = "Alguém") {
     // Evita duplicata
-    if (document.getElementById(`audioBox_${id}`)) return;
+    if (document.getElementById(`audioBox_${id}`)) {
+        // Update name if pending
+        if (peers[id] && peers[id].wrapperEl) {
+            const lbl = peers[id].wrapperEl.querySelector(".voice-label");
+            if (lbl && name) lbl.innerText = name;
+            peers[id].name = name;
+        }
+        return;
+    }
 
     const wrapper = document.createElement("div");
     wrapper.id = `audioBox_${id}`;
@@ -433,7 +505,7 @@ function addAudioElement(id, stream, name = "Alguém") {
     audio.style.width = "100%";
     wrapper.appendChild(audio);
 
-    // Uma indicação simples de que está conectado
+    // Indicação simples de conectado
     const statusDot = document.createElement("div");
     statusDot.className = "voice-status-dot";
     statusDot.style.width = "10px";
@@ -444,7 +516,7 @@ function addAudioElement(id, stream, name = "Alguém") {
     statusDot.style.marginTop = "6px";
     wrapper.appendChild(statusDot);
 
-    audioContainer.appendChild(wrapper);
+    if (audioContainer) audioContainer.appendChild(wrapper);
 
     // Armazena na tabela local
     peers[id] = peers[id] || {};
@@ -488,7 +560,7 @@ function createUserMenu(peerId, peerName, wrapper, audio) {
 
     // Toggle menu ao clicar na wrapper
     wrapper.addEventListener("click", (ev) => {
-        // não fechar em clique nos controles internos
+        // don't close when clicking controls inside menu
         if (ev.target.closest(".voice-menu")) return;
         menu.style.display = menu.style.display === "none" ? "block" : "none";
     });
@@ -518,46 +590,51 @@ function createUserMenu(peerId, peerName, wrapper, audio) {
 
 // =================== CONTROLES DE JOIN / LEAVE VOICE ===================
 
-joinVoiceBtn.onclick = async () => {
-    let cName = clanInput.value;
+if (joinVoiceBtn) {
+    joinVoiceBtn.onclick = async () => {
+        let cName = clanInput.value;
 
-    if (!cName && clanInfoDiv) {
-        const divName = clanInfoDiv.querySelector("div:first-child");
-        if (divName) cName = divName.innerText;
-    }
+        if (!cName && clanInfoDiv) {
+            const divName = clanInfoDiv.querySelector("div:first-child");
+            if (divName) cName = divName.innerText;
+        }
 
-    if (!cName) return alert("Entre em um clã primeiro.");
+        if (!cName) return alert("Entre em um clã primeiro.");
 
-    try {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
-        // garante que microfone inicia ativo
-        localStream.getAudioTracks().forEach(t => t.enabled = true);
-        isMuted = false;
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+            localStream.getAudioTracks().forEach(t => t.enabled = true);
+            isMuted = false;
 
-        joinVoiceBtn.style.display = "none";
-        leaveVoiceBtn.style.display = "inline-block";
-        voiceStatus.innerText = "Conectado | Falando...";
-        voiceStatus.style.color = "#10b981";
-        if (localMuteBtn) localMuteBtn.style.display = "inline-block";
+            joinVoiceBtn.style.display = "none";
+            if (leaveVoiceBtn) leaveVoiceBtn.style.display = "inline-block";
+            if (voiceStatus) {
+                voiceStatus.innerText = "Conectado | Falando...";
+                voiceStatus.style.color = "#10b981";
+            }
+            if (localMuteBtn) localMuteBtn.style.display = "inline-block";
 
-        socket.emit("joinVoiceChannel", { clanName: cName, username });
-        isVoiceJoined = true;
+            socket.emit("joinVoiceChannel", { clanName: cName, username });
+            isVoiceJoined = true;
 
-    } catch (err) {
-        console.error("Erro no microfone:", err);
-        alert("Erro no microfone. Use HTTPS ou Localhost.");
-    }
-};
+        } catch (err) {
+            console.error("Erro no microfone:", err);
+            alert("Erro no microfone. Use HTTPS ou Localhost.");
+        }
+    };
+}
 
-leaveVoiceBtn.onclick = () => {
-    let cName = clanInput.value;
-    if (!cName && clanInfoDiv) {
-        const divName = clanInfoDiv.querySelector("div:first-child");
-        if (divName) cName = divName.innerText;
-    }
-    socket.emit("leaveVoiceChannel", { clanName: cName, username });
-    endCall();
-};
+if (leaveVoiceBtn) {
+    leaveVoiceBtn.onclick = () => {
+        let cName = clanInput.value;
+        if (!cName && clanInfoDiv) {
+            const divName = clanInfoDiv.querySelector("div:first-child");
+            if (divName) cName = divName.innerText;
+        }
+        socket.emit("leaveVoiceChannel", { clanName: cName, username });
+        endCall();
+    };
+}
 
 function endCall() {
     if (localStream) {
@@ -570,11 +647,13 @@ function endCall() {
         } catch (e) { /* ignore */ }
     });
     peers = {};
-    audioContainer.innerHTML = "";
-    joinVoiceBtn.style.display = "inline-block";
-    leaveVoiceBtn.style.display = "none";
-    voiceStatus.innerText = "Desconectado";
-    voiceStatus.style.color = "#aaa";
+    if (audioContainer) audioContainer.innerHTML = "";
+    if (joinVoiceBtn) joinVoiceBtn.style.display = "inline-block";
+    if (leaveVoiceBtn) leaveVoiceBtn.style.display = "none";
+    if (voiceStatus) {
+        voiceStatus.innerText = "Desconectado";
+        voiceStatus.style.color = "#aaa";
+    }
     if (localMuteBtn) localMuteBtn.style.display = "none";
     isVoiceJoined = false;
 }
@@ -589,15 +668,12 @@ if (localMuteBtn) {
     };
 }
 
-// =================== SOCKET EVENTS PARA VOZ (compatível com variantes do server) ===================
+// =================== SOCKET EVENTS PARA VOZ ===================
 
 // Recebe lista de usuários já na sala - aceita tanto array de ids como array de objetos {id, name}
 socket.on("allVoiceUsers", (users) => {
-    // users pode ser: ["id1","id2"] ou [{ id: "id1", name: "Fulano" }, ...]
-    // se users for array de ids, o server deve enviar mais evento com nomes; aqui fazemos o melhor esforço.
-    users.forEach(u => {
+    (users || []).forEach(u => {
         if (typeof u === "string") {
-            // apenas ID - cria peer sem nome por enquanto
             const userID = u;
             if (!peers[userID]) {
                 const peer = createPeer(userID, socket.id, localStream);
@@ -605,22 +681,21 @@ socket.on("allVoiceUsers", (users) => {
             }
         } else if (typeof u === "object") {
             const userID = u.id;
-            const name = u.name || "Alguém";
+            const name = u.name || u.username || "Alguém";
             if (!peers[userID]) {
                 const peer = createPeer(userID, socket.id, localStream);
                 peers[userID] = { peer, name };
-                // armazenamos o nome para usar quando receber o stream
                 peers[userID].pendingName = name;
             } else {
                 peers[userID].name = name;
+                peers[userID].pendingName = name;
             }
         }
     });
 });
 
-// Outro usuário entrou - payload pode ter signal e callerID (se equivalente ao teu server original) e opcionalmente name
+// Outro usuário entrou - payload pode ter signal e callerID e opcionalmente name
 socket.on("userJoinedVoice", (payload) => {
-    // payload esperado: { signal, callerID, name? }
     if (!payload) return;
     const callerID = payload.callerID || payload.id;
     const incomingSignal = payload.signal;
@@ -635,8 +710,14 @@ socket.on("userJoinedVoice", (payload) => {
 
 // Recebe retorno de signal (quando iniciador recebe resposta)
 socket.on("receivingReturnedSignal", (payload) => {
+    if (!payload) return;
     const item = peers[payload.id];
     if (item && item.peer) item.peer.signal(payload.signal);
+    // update name if given
+    if (payload.name && peers[payload.id]) {
+        peers[payload.id].name = payload.name;
+        peers[payload.id].pendingName = payload.name;
+    }
 });
 
 // Quando alguém sai da call
@@ -650,17 +731,19 @@ socket.on("userLeftVoice", (id) => {
 });
 
 // Servidor força desconexão (por exemplo kick)
-socket.on("voiceForceDisconnect", () => {
-    // o server manda isso para o usuário alvo
+socket.on("voiceForceDisconnect", (payload) => {
+    // o server manda isso pro usuário alvo
+    // payload pode ter reason
     endCall();
+    if (payload && payload.reason) addMessage(`System: ${payload.reason}`, "system");
 });
 
 // Se o servidor enviar info adicional (nome vinculado a id)
-socket.on("voiceUserInfo", ({ id, name }) => {
+socket.on("voiceUserInfo", ({ id, name } = {}) => {
+    if (!id) return;
     if (peers[id]) {
         peers[id].name = name;
         peers[id].pendingName = name;
-        // atualiza label se já existir
         const wrapper = peers[id].wrapperEl;
         if (wrapper) {
             const lbl = wrapper.querySelector(".voice-label");
@@ -669,10 +752,6 @@ socket.on("voiceUserInfo", ({ id, name }) => {
     }
 });
 
-// Se o server enviar stream de um peer já existente, tenta setar o nome pendente
-// Observação: SimplePeer dispara 'stream' no peer - nós já tratamos isso nas factories acima.
-// Aqui só reforçamos: quando o audio for criado, usamos peers[id].pendingName caso exista.
-
 // =================== EVENTOS GERAIS DO SOCKET (mantive) ===================
 
 socket.on("clanInviteReceived", (data) => {
@@ -680,7 +759,7 @@ socket.on("clanInviteReceived", (data) => {
 });
 
 socket.on("clanUpdated", (data) => {
-    // já tratado acima
+    // tratado acima
 });
 
 // =================== FIM DO ARQUIVO ===================
