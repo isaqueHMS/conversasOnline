@@ -77,8 +77,48 @@ const voiceStatus = document.getElementById("voiceStatus");
 const audioContainer = document.getElementById("audioContainer");
 
 // =================== VARIÁVEIS GLOBAIS ===================
-let username = localStorage.getItem("username") || "Visitante";
-nameInput.value = username;
+// =================== VARIÁVEIS GLOBAIS & BLOQUEIO DE NOME ===================
+let username = localStorage.getItem("username"); // Tenta pegar o nome salvo
+
+// Verifica se já existe um nome salvo
+if (username) {
+    // --- CENÁRIO 1: USUÁRIO JÁ REGISTRADO ---
+    nameInput.value = username;
+    nameInput.disabled = true;           // Bloqueia a digitação
+    nameInput.style.opacity = "0.5";     // Deixa cinza pra indicar bloqueio
+    saveNameBtn.style.display = "none";  // Remove o botão de salvar
+    
+    // Avisa o servidor quem sou eu imediatamente
+    socket.emit("setUsername", username);
+} else {
+    // --- CENÁRIO 2: PRIMEIRO ACESSO ---
+    username = "Visitante-" + Math.floor(Math.random() * 1000); // Nome temporário
+    nameInput.value = "";
+    nameInput.placeholder = "Escolha seu Nick (Definitivo!)";
+}
+
+// =================== LÓGICA DE USUÁRIO ===================
+
+saveNameBtn.onclick = () => {
+    const newName = nameInput.value.trim();
+    
+    // Validações
+    if (!newName) return alert("Por favor, digite um nome.");
+    if (newName.length > 15) return alert("Nome muito longo! Máximo 15 letras.");
+
+    // Salva "Pra Sempre" no navegador
+    username = newName;
+    localStorage.setItem("username", username);
+
+    // Envia pro servidor
+    socket.emit("setUsername", username);
+    addMessage(`Nome registrado permanentemente: ${username}`, "system");
+
+    // Bloqueia a interface imediatamente
+    nameInput.disabled = true;
+    nameInput.style.opacity = "0.5";
+    saveNameBtn.style.display = "none";
+};
 
 let currentWarId = null;
 let currentCode = "";

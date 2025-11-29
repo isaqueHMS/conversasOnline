@@ -489,3 +489,12 @@ button:active { transform: translateY(0); }
 .voice-grid audio {
   display: none;
 }
+/* Estilo para input desativado (Nome Travado) */
+input:disabled {
+    background-color: #0f172a;
+    color: var(--accent);
+    border-color: transparent;
+    cursor: not-allowed;
+    font-weight: bold;
+    text-align: center;
+}
