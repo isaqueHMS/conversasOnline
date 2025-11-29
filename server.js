@@ -19,8 +19,6 @@ const LIMITS = {
 // =================== ESTADO ===================
 const rooms = {}; // Salas gerais (Chat e Voz)
 const clans = {}; 
-// Estrutura: { owner, admins: Set, coAdmins: Set, members: Set, banned: Set, muted: Set, wins, points }
-
 const userClans = new Map();
 const usernameToSocket = new Map();
 const socketToUsername = new Map();
@@ -32,6 +30,7 @@ function generateId(prefix = "") { return prefix + Math.random().toString(36).sl
 
 // =================== FUNÇÕES AUXILIARES ===================
 function getClanOfUser(socketId) { return userClans.get(socketId) || null; }
+
 function getSocketByUsername(username) {
   const id = usernameToSocket.get(username);
   return id ? io.sockets.sockets.get(id) : null;
@@ -52,11 +51,9 @@ function serializeClanForClient(clanName) {
     return { name, role, battles: stats.battles, muted: c.muted.has(socketId) };
   };
 
-  // Junta todos os IDs (Membros + Staff)
   const allIds = new Set([...c.members, ...c.admins, ...c.coAdmins, c.owner]);
   const detailedMembers = Array.from(allIds).map(id => getMemberData(id));
 
-  // Ordenação Hierárquica
   detailedMembers.sort((a, b) => {
       const roles = { "Dono": 4, "Admin": 3, "Co-Admin": 2, "Membro": 1 };
       return roles[b.role] - roles[a.role];
@@ -71,6 +68,16 @@ function serializeClanForClient(clanName) {
   };
 }
 
+// Helper para enviar update SÓ para quem é do clã
+function notifyClanUpdate(clanName) {
+    if (!clanName) return;
+    const data = serializeClanForClient(clanName);
+    // Envia para a sala específica do clã
+    io.to("clan_" + clanName).emit("clanUpdated", data);
+    // Atualiza a lista pública para todos (apenas nomes e qtd membros)
+    io.emit("clanList", getAllClansList());
+}
+
 // =================== SOCKET ===================
 io.on("connection", (socket) => {
   console.log("Conectado:", socket.id);
@@ -78,8 +85,8 @@ io.on("connection", (socket) => {
   let username = "Anônimo";
   socketToUsername.set(socket.id, username);
   socket.username = username;
-  socket.room = null;      // Sala de Texto
-  socket.voiceRoom = null; // Sala de Voz
+  socket.room = null;      
+  socket.voiceRoom = null; 
 
   // --- USERNAME ---
   socket.on("setUsername", (newName) => {
@@ -97,7 +104,7 @@ io.on("connection", (socket) => {
     socket.emit("system", `Nome atualizado: ${newName}`);
     
     const cName = getClanOfUser(socket.id);
-    if(cName) io.emit("clanUpdated", serializeClanForClient(cName));
+    if(cName) notifyClanUpdate(cName);
   });
 
   // --- SALAS & CHAT PÚBLICO ---
@@ -124,19 +131,20 @@ io.on("connection", (socket) => {
         owner: socket.id, 
         admins: new Set(), 
         coAdmins: new Set(), 
-        members: new Set(), // Membros comuns
+        members: new Set(),
         banned: new Set(),
         muted: new Set(),
         wins: 0, points: 0 
     };
     userClans.set(socket.id, name);
     
+    // CORREÇÃO: Entra na sala do Socket.io específica desse clã
+    socket.join("clan_" + name);
+    
     socket.emit("clanInfo", `Clã ${name} criado.`);
-    io.emit("clanUpdated", serializeClanForClient(name));
-    io.emit("clanList", getAllClansList());
+    notifyClanUpdate(name);
   });
 
-  // --- CONVITES ---
   socket.on("inviteToClan", (target) => {
     const cName = getClanOfUser(socket.id);
     if (!cName) return socket.emit("clanInfo", "Sem clã.");
@@ -168,11 +176,14 @@ io.on("connection", (socket) => {
     userClans.set(socket.id, cName);
     inv.delete(socket.id);
     
+    // CORREÇÃO: Entra na sala do clã
+    socket.join("clan_" + cName);
+    
     socket.emit("clanInfo", `Entrou em ${cName}`);
-    io.emit("clanUpdated", serializeClanForClient(cName));
+    notifyClanUpdate(cName);
   });
 
-  // --- PROMOÇÃO/HIERARQUIA ---
+  // --- PROMOÇÃO ---
   socket.on("promoteMember", (targetName) => {
     const cName = getClanOfUser(socket.id); if(!cName) return;
     const c = clans[cName];
@@ -205,7 +216,7 @@ io.on("connection", (socket) => {
             io.emit("system", `CLÃ ${cName}: ${tSocket.username} é o novo DONO!`);
         }
     }
-    io.emit("clanUpdated", serializeClanForClient(cName));
+    notifyClanUpdate(cName);
   });
 
   // --- REBAIXAMENTO ---
@@ -228,7 +239,7 @@ io.on("connection", (socket) => {
         if(tRole === 2) { c.admins.delete(tSocket.id); c.coAdmins.add(tSocket.id); }
         else if(tRole === 1) { c.coAdmins.delete(tSocket.id); c.members.add(tSocket.id); }
     }
-    io.emit("clanUpdated", serializeClanForClient(cName));
+    notifyClanUpdate(cName);
   });
 
   // --- PODERES DONO ---
@@ -239,8 +250,12 @@ io.on("connection", (socket) => {
       const tSocket = getSocketByUsername(targetName);
       if(tSocket && tSocket.id !== socket.id) {
           removeUserFromClanStruct(cName, tSocket.id);
+          // CORREÇÃO: Remove da sala do clã
+          tSocket.leave("clan_" + cName);
           tSocket.emit("clanInfo", "Você foi expulso.");
-          io.emit("clanUpdated", serializeClanForClient(cName));
+          // Limpa a tela do usuário expulso
+          tSocket.emit("clanUpdated", null);
+          notifyClanUpdate(cName);
       }
   });
 
@@ -251,10 +266,13 @@ io.on("connection", (socket) => {
       const tSocket = getSocketByUsername(targetName);
       if(tSocket) {
           removeUserFromClanStruct(cName, tSocket.id);
+          // CORREÇÃO: Remove da sala do clã
+          tSocket.leave("clan_" + cName);
           c.banned.add(tSocket.id); c.banned.add(targetName);
           tSocket.emit("clanInfo", "BANIDO DO CLÃ.");
+          tSocket.emit("clanUpdated", null);
       } else { c.banned.add(targetName); }
-      io.emit("clanUpdated", serializeClanForClient(cName));
+      notifyClanUpdate(cName);
   });
 
   socket.on("muteMember", (targetName) => {
@@ -266,14 +284,22 @@ io.on("connection", (socket) => {
           if(c.muted.has(tSocket.id)) { c.muted.delete(tSocket.id); socket.emit("clanInfo", "Desmutado."); }
           else { c.muted.add(tSocket.id); socket.emit("clanInfo", "Mutado."); }
       }
-      io.emit("clanUpdated", serializeClanForClient(cName));
+      notifyClanUpdate(cName);
   });
 
   socket.on("leaveClan", () => {
     const cName = getClanOfUser(socket.id); if(!cName) return;
+    
+    // CORREÇÃO: Sai da sala do clã
+    socket.leave("clan_" + cName);
+    
     removeUserFromClanStruct(cName, socket.id);
+    
+    // Limpa a tela de quem saiu
     socket.emit("clanUpdated", null);
-    if(clans[cName]) io.emit("clanUpdated", serializeClanForClient(cName));
+    
+    // Atualiza a tela de quem ficou
+    if(clans[cName]) notifyClanUpdate(cName);
   });
 
   function removeUserFromClanStruct(cName, uid) {
@@ -294,11 +320,9 @@ io.on("connection", (socket) => {
       const cName = getClanOfUser(socket.id); if(!cName) return;
       const c = clans[cName];
       if(c.muted.has(socket.id)) return socket.emit("clanInfo", "Silenciado.");
-      const all = new Set([...c.members, ...c.coAdmins, ...c.admins, c.owner]);
-      all.forEach(uid => {
-          const s = io.sockets.sockets.get(uid);
-          if(s) s.emit("clanChat", { from: socket.username, text: txt });
-      });
+      
+      // CORREÇÃO: Envia mensagem apenas para a sala do clã
+      io.to("clan_" + cName).emit("clanChat", { from: socket.username, text: txt });
   });
 
   // ================== GUERRAS ==================
@@ -306,12 +330,13 @@ io.on("connection", (socket) => {
       const cName = getClanOfUser(socket.id);
       if(!cName || !clans[targetClan]) return;
       const c = clans[cName];
-      // Apenas Dono ou Admin
       if(c.owner !== socket.id && !c.admins.has(socket.id)) return socket.emit("clanInfo", "Sem permissão.");
 
       const warId = generateId("war");
       wars[warId] = { id: warId, clanA: cName, clanB: targetClan, scores: { [cName]:0, [targetClan]:0 }, active: true };
-      io.emit("warCreated", { warId, clanA: cName, clanB: targetClan });
+      
+      // Avisa os dois clãs envolvidos
+      io.to("clan_" + cName).to("clan_" + targetClan).emit("warCreated", { warId, clanA: cName, clanB: targetClan });
 
       setTimeout(() => {
           if(wars[warId]) {
@@ -326,8 +351,9 @@ io.on("connection", (socket) => {
               
               io.emit("warEnded", { warId, winner });
               delete wars[warId];
-              io.emit("clanUpdated", serializeClanForClient(w.clanA));
-              io.emit("clanUpdated", serializeClanForClient(w.clanB));
+              
+              notifyClanUpdate(w.clanA);
+              notifyClanUpdate(w.clanB);
           }
       }, durationSec * 1000);
   });
@@ -343,28 +369,25 @@ io.on("connection", (socket) => {
       if(!userStats[socket.username]) userStats[socket.username] = { battles: 0 };
       userStats[socket.username].battles++;
       
-      io.emit("warUpdated", { warId, scores: w.scores });
-      io.emit("clanUpdated", serializeClanForClient(cName));
+      // Atualiza placar para os envolvidos
+      io.to("clan_" + w.clanA).to("clan_" + w.clanB).emit("warUpdated", { warId, scores: w.scores });
+      notifyClanUpdate(cName);
   });
 
   socket.on("requestRanking", () => {
     socket.emit("ranking", Object.keys(clans).map(n => ({ name: n, wins: clans[n].wins, points: clans[n].points })).sort((a,b)=>b.wins-a.wins));
   });
 
-  // ================== SISTEMA DE VOZ (WEBRTC) ==================
-  
+  // ================== SISTEMA DE VOZ ==================
   socket.on("joinVoiceChannel", (clanName) => {
       const roomID = `voice_${clanName}`;
       socket.voiceRoom = roomID;
       socket.join(roomID);
 
       rooms[roomID] = rooms[roomID] || { users: new Set() };
-      // Filtra o próprio usuário para não se conectar consigo mesmo
       const usersInThisRoom = Array.from(rooms[roomID].users).filter(id => id !== socket.id);
-      
       rooms[roomID].users.add(socket.id);
       
-      // Envia a lista de quem JÁ está lá para o novo usuário iniciar a conexão
       socket.emit("allVoiceUsers", usersInThisRoom);
   });
 
@@ -390,18 +413,14 @@ io.on("connection", (socket) => {
       socket.to(roomID).emit("userLeftVoice", socket.id);
   });
 
-  // ================== DESCONEXÃO GERAL ==================
+  // ================== DESCONEXÃO ==================
   socket.on("disconnect", () => {
-      // Limpeza Chat Texto
       if(socket.room && rooms[socket.room]) rooms[socket.room].users.delete(socket.id);
-      
-      // Limpeza Chat Voz
       if(socket.voiceRoom) {
           const vRoom = socket.voiceRoom;
           if(rooms[vRoom]) rooms[vRoom].users.delete(socket.id);
           socket.to(vRoom).emit("userLeftVoice", socket.id);
       }
-
       socketToUsername.delete(socket.id);
   });
 });
