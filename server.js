@@ -17,7 +17,7 @@ const LIMITS = {
 };
 
 // =================== ESTADO ===================
-const rooms = {};
+const rooms = {}; // Salas gerais (Chat e Voz)
 const clans = {}; 
 // Estrutura: { owner, admins: Set, coAdmins: Set, members: Set, banned: Set, muted: Set, wins, points }
 
@@ -78,7 +78,8 @@ io.on("connection", (socket) => {
   let username = "Anônimo";
   socketToUsername.set(socket.id, username);
   socket.username = username;
-  socket.room = null;
+  socket.room = null;      // Sala de Texto
+  socket.voiceRoom = null; // Sala de Voz
 
   // --- USERNAME ---
   socket.on("setUsername", (newName) => {
@@ -135,7 +136,7 @@ io.on("connection", (socket) => {
     io.emit("clanList", getAllClansList());
   });
 
-  // --- CONVITES (CORRIGIDO) ---
+  // --- CONVITES ---
   socket.on("inviteToClan", (target) => {
     const cName = getClanOfUser(socket.id);
     if (!cName) return socket.emit("clanInfo", "Sem clã.");
@@ -154,7 +155,6 @@ io.on("connection", (socket) => {
     invitations.set(cName, invitations.get(cName) || new Set());
     invitations.get(cName).add(tSocket.id);
     
-    // EVIA O EVENTO ESPECIAL PARA O CLIENTE PREENCHER O NOME
     tSocket.emit("clanInviteReceived", { clanName: cName, from: socket.username });
     socket.emit("clanInfo", `Convite enviado para ${target}.`);
   });
@@ -172,7 +172,7 @@ io.on("connection", (socket) => {
     io.emit("clanUpdated", serializeClanForClient(cName));
   });
 
-  // --- PROMOÇÃO (LÓGICA HIERARQUIA) ---
+  // --- PROMOÇÃO/HIERARQUIA ---
   socket.on("promoteMember", (targetName) => {
     const cName = getClanOfUser(socket.id); if(!cName) return;
     const c = clans[cName];
@@ -183,25 +183,22 @@ io.on("connection", (socket) => {
     const targetId = tSocket.id;
     let targetRole = c.admins.has(targetId) ? 2 : c.coAdmins.has(targetId) ? 1 : 0;
 
-    // Co-Admin/Admin promovendo Membro -> Co-Admin
     if ((myRole === 1 || myRole === 2) && targetRole === 0) {
         if(c.coAdmins.size >= LIMITS.coAdmins) return socket.emit("clanInfo", "Max Co-Admins.");
         c.members.delete(targetId); c.coAdmins.add(targetId);
     }
-    // Admin promovendo Co-Admin -> Admin
     else if (myRole === 2 && targetRole === 1) {
          if(c.admins.size >= LIMITS.admins) return socket.emit("clanInfo", "Max Admins.");
          c.coAdmins.delete(targetId); c.admins.add(targetId);
     }
-    // Dono promovendo
     else if (myRole === 3) {
-        if (targetRole === 0) { // Membro -> Co
+        if (targetRole === 0) { 
             if(c.coAdmins.size >= LIMITS.coAdmins) return;
             c.members.delete(targetId); c.coAdmins.add(targetId);
-        } else if (targetRole === 1) { // Co -> Admin
+        } else if (targetRole === 1) { 
             if(c.admins.size >= LIMITS.admins) return;
             c.coAdmins.delete(targetId); c.admins.add(targetId);
-        } else if (targetRole === 2) { // Admin -> Dono (Troca)
+        } else if (targetRole === 2) { 
             c.owner = targetId;
             c.admins.delete(targetId);
             c.admins.add(socket.id);
@@ -221,13 +218,13 @@ io.on("connection", (socket) => {
     const myRole = c.owner === socket.id ? 3 : c.admins.has(socket.id) ? 2 : 0;
     const tRole = c.admins.has(tSocket.id) ? 2 : c.coAdmins.has(tSocket.id) ? 1 : 0;
 
-    if (myRole <= tRole && myRole !== 3) return; // Não pode rebaixar superior/igual
-    if (myRole === 0 || c.coAdmins.has(socket.id)) return; // Co-Admin não rebaixa
+    if (myRole <= tRole && myRole !== 3) return;
+    if (myRole === 0 || c.coAdmins.has(socket.id)) return;
 
-    if (myRole === 2 && tRole === 1) { // Admin rebaixa Co
+    if (myRole === 2 && tRole === 1) { 
         c.coAdmins.delete(tSocket.id); c.members.add(tSocket.id);
     }
-    else if (myRole === 3) { // Dono rebaixa qualquer um
+    else if (myRole === 3) {
         if(tRole === 2) { c.admins.delete(tSocket.id); c.coAdmins.add(tSocket.id); }
         else if(tRole === 1) { c.coAdmins.delete(tSocket.id); c.members.add(tSocket.id); }
     }
@@ -340,7 +337,6 @@ io.on("connection", (socket) => {
       if(!w || !w.active) return;
       const cName = getClanOfUser(socket.id);
       const c = clans[cName];
-      // Co-Admin não pontua
       if(c.coAdmins.has(socket.id)) return;
 
       w.scores[cName] += points || 1;
@@ -355,8 +351,57 @@ io.on("connection", (socket) => {
     socket.emit("ranking", Object.keys(clans).map(n => ({ name: n, wins: clans[n].wins, points: clans[n].points })).sort((a,b)=>b.wins-a.wins));
   });
 
+  // ================== SISTEMA DE VOZ (WEBRTC) ==================
+  
+  socket.on("joinVoiceChannel", (clanName) => {
+      const roomID = `voice_${clanName}`;
+      socket.voiceRoom = roomID;
+      socket.join(roomID);
+
+      rooms[roomID] = rooms[roomID] || { users: new Set() };
+      // Filtra o próprio usuário para não se conectar consigo mesmo
+      const usersInThisRoom = Array.from(rooms[roomID].users).filter(id => id !== socket.id);
+      
+      rooms[roomID].users.add(socket.id);
+      
+      // Envia a lista de quem JÁ está lá para o novo usuário iniciar a conexão
+      socket.emit("allVoiceUsers", usersInThisRoom);
+  });
+
+  socket.on("sendingSignal", payload => {
+      io.to(payload.userToSignal).emit("userJoinedVoice", { 
+          signal: payload.signal, 
+          callerID: payload.callerID 
+      });
+  });
+
+  socket.on("returningSignal", payload => {
+      io.to(payload.callerID).emit("receivingReturnedSignal", { 
+          signal: payload.signal, 
+          id: socket.id 
+      });
+  });
+
+  socket.on("leaveVoiceChannel", (clanName) => {
+      const roomID = `voice_${clanName}`;
+      if(rooms[roomID]) rooms[roomID].users.delete(socket.id);
+      socket.leave(roomID);
+      socket.voiceRoom = null;
+      socket.to(roomID).emit("userLeftVoice", socket.id);
+  });
+
+  // ================== DESCONEXÃO GERAL ==================
   socket.on("disconnect", () => {
+      // Limpeza Chat Texto
       if(socket.room && rooms[socket.room]) rooms[socket.room].users.delete(socket.id);
+      
+      // Limpeza Chat Voz
+      if(socket.voiceRoom) {
+          const vRoom = socket.voiceRoom;
+          if(rooms[vRoom]) rooms[vRoom].users.delete(socket.id);
+          socket.to(vRoom).emit("userLeftVoice", socket.id);
+      }
+
       socketToUsername.delete(socket.id);
   });
 });

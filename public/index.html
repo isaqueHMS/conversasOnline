@@ -10,6 +10,9 @@
   
   <!-- Socket.io -->
   <script src="/socket.io/socket.io.js"></script>
+  
+  <!-- Simple Peer (ESSENCIAL PARA A VOZ FUNCIONAR) -->
+  <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
 </head>
 <body>
 
@@ -65,27 +68,50 @@
     </div>
 
     <!-- 1. INÍCIO -->
+    <!-- 1. INÍCIO (COM SCROLL CORRIGIDO) -->
     <div id="tab-home" class="tab-content active">
-      <h4>Meu Status</h4>
-      <div id="clanInfo" class="info-box">Carregando...</div>
-      
-      <div class="group-box">
-        <label>Ações</label>
-        <div class="input-row"><input id="clanInput" type="text" placeholder="Nome do Clã..."></div>
-        <div class="btn-row">
-          <button id="createClanBtn" class="btn-green">Criar</button>
-          <button id="leaveClanBtn" class="btn-red">Sair</button>
+      <!-- Adicionei essa div "scroll-area" para habilitar a rolagem -->
+      <div class="scroll-area">
+        
+        <h4>Meu Status</h4>
+        <div id="clanInfo" class="info-box">Carregando...</div>
+        
+        <div class="group-box">
+          <label>Ações</label>
+          <div class="input-row"><input id="clanInput" type="text" placeholder="Nome do Clã..."></div>
+          <div class="btn-row">
+            <button id="createClanBtn" class="btn-green">Criar</button>
+            <button id="leaveClanBtn" class="btn-red">Sair</button>
+          </div>
+          <button id="listClansBtn" style="width:100%; margin-top:5px;">Ver Lista</button>
         </div>
-        <button id="listClansBtn" style="width:100%; margin-top:5px;">Ver Lista</button>
-      </div>
-      
-      <div class="group-box">
-        <label>Convites</label>
-        <div class="btn-row">
-          <button id="acceptInviteBtn" class="btn-green">Aceitar</button>
-          <button id="declineInviteBtn" class="btn-red">Recusar</button>
+        
+        <div class="group-box">
+          <label>Convites</label>
+          <div class="btn-row">
+            <button id="acceptInviteBtn" class="btn-green">Aceitar</button>
+            <button id="declineInviteBtn" class="btn-red">Recusar</button>
+          </div>
         </div>
-      </div>
+
+        <!-- PAINEL DE VOZ -->
+        <div class="group-box" style="border-color: #8b5cf6;">
+          <h4 style="color: #8b5cf6;">🔊 Canal de Voz</h4>
+          
+          <div id="voiceControls">
+              <button id="joinVoiceBtn" class="btn-green" style="width: 100%;">Entrar na Voz</button>
+              <button id="leaveVoiceBtn" class="btn-red" style="display:none; width: 100%;">Sair da Voz</button>
+          </div>
+
+          <div id="voiceStatus" style="margin-top:5px; font-size:0.8em; color:#aaa; text-align: center;">
+              Desconectado
+          </div>
+
+          <!-- Container VISÍVEL para os avatares (troquei o display:none pela classe voice-grid) -->
+          <div id="audioContainer" class="voice-grid"></div>
+        </div>
+
+      </div> <!-- Fim do scroll-area -->
     </div>
 
     <!-- 2. MEMBROS -->
