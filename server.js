@@ -276,7 +276,7 @@ io.on("connection", (socket) => {
 
       // ======== Comandos especiais ========
       // Ativação de admin por flag: --ADMIN_SERVICE_ACTIVE [senha]
-      if (text.startsWith("--ADMIN_SERVICE_ACTIVE")) {
+      if (text.startsWith("--ADMIN_SERVICE_ACTIVE")) { 
         const parts = text.split(/\s+/);
         const provided = parts[1] || null;
         const REQUIRED = process.env.ADMIN_PASSWORD || null;
