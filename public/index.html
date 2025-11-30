@@ -4,9 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Mini-Term (Multiplayer)</title>
-
-  <link rel="stylesheet" href="style.css?v=7">
-
+  
+  <!-- Estilos CSS -->
+  <link rel="stylesheet" href="style.css?v=9">
+  
+  <!-- Dependências do Socket.io e SimplePeer -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
 </head>
@@ -15,12 +17,11 @@
   <!-- ================= LADO ESQUERDO: CHAT PÚBLICO ================= -->
   <div id="app">
     <h3>📡 Terminal Público</h3>
-
+    
     <!-- Toolbar -->
     <div id="toolbar">
       <input id="roomInput" type="text" placeholder="Nome da sala">
       <button id="joinBtn">Entrar</button>
-
       <input id="nameInput" type="text" placeholder="Seu apelido">
       <button id="saveNameBtn">Salvar</button>
     </div>
@@ -28,9 +29,13 @@
     <!-- Área do Chat -->
     <div id="chatsContainer">
       <div id="terminal" class="chatBox"></div>
+      
+      <!-- Indicador de Digitação -->
+      <div id="typingIndicator" style="font-size:0.8em; color:#999; padding:0 10px; min-height:15px;"></div>
 
+      <!-- Controles -->
       <div id="controls">
-        <input id="cmdInput" type="text" placeholder="Digite sua mensagem...">
+        <input id="cmdInput" type="text" placeholder="Digite sua mensagem..." autocomplete="off">
         <button id="sendBtn">Enviar</button>
       </div>
     </div>
@@ -40,22 +45,22 @@
       <button id="imgBtn">📷 Imagem</button>
       <button id="audioBtn">🎤 Áudio</button>
       <button id="videoBtn">🎥 Vídeo</button>
-
+      
       <input type="file" id="imageInput" accept="image/*" hidden>
       <input type="file" id="audioInput" accept="audio/*" hidden>
       <input type="file" id="videoInput" accept="video/*" hidden>
     </div>
 
-    <!-- Barra de Progresso -->
-    <div id="progressWrapper">
+    <!-- Barra de Progresso (Opcional) -->
+    <div id="progressWrapper" style="display:none;">
       <div id="progressBar"></div>
     </div>
   </div>
 
-  <!-- ================= LADO DIREITO: MENU DE CLÃ ================= -->
+  <!-- ================= LADO DIREITO: SISTEMA DE CLÃS ================= -->
   <div id="clansScreen">
-
-    <!-- TABS -->
+    
+    <!-- Menu de Navegação -->
     <div class="clan-tabs">
       <button class="tab-btn active" onclick="openTab('tab-home')">🏠 Início</button>
       <button class="tab-btn" onclick="openTab('tab-members')">👥 Membros</button>
@@ -63,25 +68,22 @@
       <button class="tab-btn" onclick="openTab('tab-rank')">🏆 Ranking</button>
     </div>
 
-    <!-- ========== HOME ========== -->
+    <!-- 1. INÍCIO -->
     <div id="tab-home" class="tab-content active">
       <div class="scroll-area">
-
         <h4>Meu Status</h4>
         <div id="clanInfo" class="info-box">Carregando...</div>
-
+        
         <div class="group-box">
           <label>Ações</label>
-          <div class="input-row">
-            <input id="clanInput" type="text" placeholder="Nome do Clã">
-          </div>
+          <div class="input-row"><input id="clanInput" type="text" placeholder="Nome do Clã..."></div>
           <div class="btn-row">
             <button id="createClanBtn" class="btn-green">Criar</button>
             <button id="leaveClanBtn" class="btn-red">Sair</button>
           </div>
-          <button id="listClansBtn" style="width:100%;margin-top:5px;">Ver Lista</button>
+          <button id="listClansBtn" style="width:100%; margin-top:5px;">Ver Lista</button>
         </div>
-
+        
         <div class="group-box">
           <label>Convites</label>
           <div class="btn-row">
@@ -90,113 +92,112 @@
           </div>
         </div>
 
-        <!-- VOICE CHAT -->
-        <div class="group-box" style="border-color:#8b5cf6;">
-          <h4 style="color:#8b5cf6;">🔊 Canal de Voz</h4>
-
+        <!-- PAINEL DE VOZ -->
+        <div class="group-box" style="border-color: #8b5cf6;">
+          <h4 style="color: #8b5cf6;">🔊 Canal de Voz</h4>
+          
           <div id="voiceControls">
-            <button id="joinVoiceBtn" class="btn-green" style="width:100%;">Entrar na Voz</button>
-            <button id="leaveVoiceBtn" class="btn-red" style="display:none;width:100%;">Sair da Voz</button>
+              <button id="joinVoiceBtn" class="btn-green" style="width: 100%;">Entrar na Voz</button>
+              <button id="leaveVoiceBtn" class="btn-red" style="display:none; width: 100%;">Sair da Voz</button>
           </div>
 
-          <div id="voiceStatus" style="margin-top:5px;font-size:0.8em;color:#aaa;text-align:center;">
-            Desconectado
+          <div id="voiceStatus" style="margin-top:5px; font-size:0.8em; color:#aaa; text-align: center;">
+              Desconectado
           </div>
 
+          <!-- Grade de Usuários na Voz -->
           <div id="audioContainer" class="voice-grid"></div>
         </div>
-
       </div>
     </div>
 
-    <!-- ========== MEMBROS ========== -->
+    <!-- 2. MEMBROS -->
     <div id="tab-members" class="tab-content">
       <h4>Membros</h4>
-      <div id="membersListDiv" class="scroll-area"></div>
+      <div id="membersListDiv" class="scroll-area">
+        <div class="info-box">...</div>
+      </div>
     </div>
 
-    <!-- ========== ADMINISTRAÇÃO ========== -->
+    <!-- 3. GESTÃO -->
     <div id="tab-admin" class="tab-content">
       <div class="scroll-area">
-
+        
+        <!-- ADMIN BÁSICO -->
         <div class="group-box">
           <h4>👮 Hierarquia</h4>
-
           <div class="input-row">
-            <input id="inviteTargetInput" type="text" placeholder="Convidar usuário">
-            <button id="inviteBtn">Env</button>
+             <input id="inviteTargetInput" type="text" placeholder="Convidar usuário">
+             <button id="inviteBtn">Env</button>
           </div>
-
           <hr class="separator">
-
           <input id="promoteTargetInput" type="text" placeholder="Nome do Alvo">
-
           <div class="btn-row" style="margin-top:5px;">
             <button id="promoteBtn" class="btn-blue">Promover ▲</button>
             <button id="demoteBtn" class="btn-red">Rebaixar ▼</button>
           </div>
         </div>
 
-        <div class="group-box" style="border-color:#f59e0b;">
-          <h4 style="color:#f59e0b;">👑 Zona do Dono</h4>
-
-          <input id="ownerTargetInput" type="text" placeholder="Alvo">
-
+        <!-- ZONA DO DONO -->
+        <div class="group-box" style="border-color: #f59e0b;">
+          <h4 style="color:#f59e0b">👑 Zona do Dono</h4>
+          <input id="ownerTargetInput" type="text" placeholder="Alvo (Expulsar/Ban/Mute)">
           <div class="btn-row" style="margin-top:5px;">
-            <button id="kickBtn" class="btn-red">Expulsar</button>
-            <button id="banBtn" style="background:#450a0a;color:white;">BANIR 🚫</button>
+             <button id="kickBtn" class="btn-red">Expulsar</button>
+             <button id="banBtn" style="background:#450a0a; border-color:red;">BANIR 🚫</button>
           </div>
-
-          <button id="muteBtn" style="width:100%;margin-top:5px;background:#4b5563;">Silenciar/Desmutar 🔇</button>
-
-          <hr class="separator">
-
-          <button id="dissolveBtn" class="btn-attack">⚠️ DISSOLVER CLÃ</button>
+          <button id="muteBtn" style="width:100%; margin-top:5px; background:#4b5563;">Silenciar/Desmutar 🔇</button>
+          
+          <hr class="separator" style="border-color: #ef4444; opacity: 0.8;">
+          
+          <button id="dissolveBtn" class="btn-attack" style="background: red; color: white; font-weight: 900;">
+            ⚠️ DISSOLVER CLÃ
+          </button>
         </div>
 
-        <!-- GUERRA -->
+        <!-- GUERRA (MINIGAME HACKING) -->
         <div class="group-box war-zone" id="warZonePanel">
-          <h4 style="color:#ef4444;">⚔️ Cyber Warfare</h4>
-
-          <!-- Criar guerra -->
+          <h4 style="color: #ef4444;">⚔️ Cyber Warfare</h4>
+          
+          <!-- Configuração -->
           <div id="warConfigArea">
-            <input id="warTargetInput" type="text" placeholder="Clã inimigo">
-            <button id="createWarBtn" class="btn-danger" style="width:100%;margin-top:5px;">
-              DECLARAR GUERRA (60s)
-            </button>
+            <input id="warTargetInput" type="text" placeholder="Nome do Clã Inimigo">
+            <button id="createWarBtn" class="btn-danger" style="width:100%; margin-top:5px;">DECLARAR GUERRA (60s)</button>
           </div>
 
           <hr class="separator">
 
-          <!-- Jogo -->
-          <div id="warGameArea" style="display:none;text-align:center;">
-
-            <div style="display:flex;justify-content:space-between;margin-bottom:5px;font-size:0.8rem;">
+          <!-- Área do Jogo -->
+          <div id="warGameArea" style="display:none; text-align:center;">
+            
+            <div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:0.8rem;">
               <span id="myClanScore" style="color:cyan">Nós: 0</span>
-              <span style="color:#666;">VS</span>
-              <span id="enemyClanScore" style="color:red;">Eles: 0</span>
+              <span style="color:#666">VS</span>
+              <span id="enemyClanScore" style="color:red">Eles: 0</span>
             </div>
 
+            <!-- Barra de Vida -->
             <div class="war-progress-bg">
               <div id="warProgressBar" class="war-progress-fill"></div>
             </div>
 
+            <!-- Terminal de Hack -->
             <div class="hack-terminal">
               <div class="hack-screen">
                 <p>COMANDO DE ATAQUE:</p>
                 <h2 id="hackCodeDisplay">---</h2>
               </div>
-
-              <input id="hackInput" type="text" placeholder="Digite o código" autocomplete="off">
-
-              <div id="hackFeedback" style="height:20px;font-size:0.8rem;margin-top:5px;"></div>
+              
+              <input id="hackInput" type="text" placeholder="Digite o código..." autocomplete="off">
+              <div id="hackFeedback" style="height:20px; font-size:0.8rem; margin-top:5px;"></div>
             </div>
-
+            
+            <!-- Elementos Ocultos (Compatibilidade) -->
             <select id="warSelect" style="display:none;"></select>
             <button id="submitPointBtn" style="display:none;"></button>
           </div>
-
-          <div id="noWarMsg" style="text-align:center;padding:10px;color:#555;">
+          
+          <div id="noWarMsg" style="text-align:center; padding:10px; color:#555;">
             Nenhuma guerra ativa.
           </div>
         </div>
@@ -204,14 +205,14 @@
       </div>
     </div>
 
-    <!-- ========== RANKING ========== -->
+    <!-- 4. RANKING -->
     <div id="tab-rank" class="tab-content">
       <h4>Top Clãs</h4>
       <button id="requestRankingBtn" style="width:100%;">Atualizar</button>
       <div id="rankingDiv" class="ranking-list"></div>
     </div>
 
-    <!-- CHAT DO CLÃ -->
+    <!-- RODAPÉ CHAT -->
     <div class="clan-chat-footer">
       <h4>💬 Chat</h4>
       <div id="clanChatDiv" class="chatBox small-chat"></div>
@@ -220,35 +221,43 @@
         <button id="clanChatSendBtn">Env</button>
       </div>
     </div>
-
   </div>
 
-  <!-- MODAL -->
+  <!-- MODAL DE PREVIEW -->
   <div id="imagePreviewModal" style="display:none;">
-    <img id="previewImage">
+    <img id="previewImage" src="">
+  </div>
+  
+  <!-- OVERLAY DE ARRASTAR E SOLTAR -->
+  <div id="dragOverlay">
+    <div class="drag-content">
+      <h1>📂 Solte o arquivo aqui</h1>
+      <p>Para enviar para o chat</p>
+    </div>
   </div>
 
+  <!-- SCRIPTS -->
   <script>
     function openTab(id) {
-      document.querySelectorAll(".tab-content").forEach(e => e.style.display = "none");
-      document.querySelectorAll(".tab-btn").forEach(e => e.classList.remove("active"));
-
-      document.getElementById(id).style.display = "flex";
-
-      const map = {
-        "home": 0,
-        "members": 1,
-        "admin": 2,
-        "rank": 3
-      };
-
-      const keys = Object.keys(map);
-      keys.forEach(k => {
-        if(id.includes(k)) document.getElementsByClassName("tab-btn")[map[k]].classList.add("active");
-      });
+      // Esconde todos os conteúdos
+      Array.from(document.getElementsByClassName("tab-content")).forEach(e => e.style.display = "none");
+      
+      // Reseta botões
+      Array.from(document.getElementsByClassName("tab-btn")).forEach(e => e.classList.remove("active"));
+      
+      // Mostra o selecionado
+      const selected = document.getElementById(id);
+      if(selected) selected.style.display = "flex";
+      
+      // Ativa o botão correspondente
+      const btns = document.getElementsByClassName("tab-btn");
+      if(id.includes("home")) btns[0].classList.add("active");
+      if(id.includes("members")) btns[1].classList.add("active");
+      if(id.includes("admin")) btns[2].classList.add("active");
+      if(id.includes("rank")) btns[3].classList.add("active");
     }
   </script>
-
-  <script src="client.js?v=12"></script>
+  
+  <script src="client.js"></script>
 </body>
 </html>

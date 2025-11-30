@@ -1,6 +1,4 @@
-// client.js - versão completa integrada e corrigida
-// Dependências: SimplePeer, socket.io
-
+// =================== SOCKET ===================
 const socket = io();
 
 // =================== ELEMENTOS DO DOM ===================
@@ -16,7 +14,7 @@ const terminal = document.getElementById("terminal");
 const cmdInput = document.getElementById("cmdInput");
 const sendBtn = document.getElementById("sendBtn");
 
-// --- Mídia ---
+// --- Mídia & Upload ---
 const imgBtn = document.getElementById("imgBtn");
 const audioBtn = document.getElementById("audioBtn");
 const videoBtn = document.getElementById("videoBtn");
@@ -26,6 +24,7 @@ const videoInput = document.getElementById("videoInput");
 const progressBar = document.getElementById("progressBar");
 const previewModal = document.getElementById("imagePreviewModal");
 const previewImage = document.getElementById("previewImage");
+const dragOverlay = document.getElementById("dragOverlay");
 
 // --- Clãs: Home & Ações ---
 const clanInput = document.getElementById("clanInput");
@@ -56,14 +55,14 @@ const clanChatDiv = document.getElementById("clanChatDiv");
 const clanChatInput = document.getElementById("clanChatInput");
 const clanChatSendBtn = document.getElementById("clanChatSendBtn");
 
-// --- Clãs: Guerras & Minigame Hacking ---
+// --- Guerras & Minigame ---
 const createWarBtn = document.getElementById("createWarBtn");
 const warTargetInput = document.getElementById("warTargetInput");
 const warZonePanel = document.getElementById("warZonePanel");
 const requestRankingBtn = document.getElementById("requestRankingBtn");
 const rankingDiv = document.getElementById("rankingDiv");
 
-// Elements used by the war/minigame logic (were missing in original)
+// Elementos do Jogo Hacker
 const hackCodeDisplay = document.getElementById("hackCodeDisplay");
 const hackInput = document.getElementById("hackInput");
 const hackFeedback = document.getElementById("hackFeedback");
@@ -73,30 +72,32 @@ const warGameArea = document.getElementById("warGameArea");
 const myClanScoreEl = document.getElementById("myClanScore");
 const enemyClanScoreEl = document.getElementById("enemyClanScore");
 const warProgressBar = document.getElementById("warProgressBar");
-const warSelect = document.getElementById("warSelect");
-const submitPointBtn = document.getElementById("submitPointBtn");
 
-// --- Clãs: Voz (WebRTC) ---
+// --- Elementos do Captcha de Guerra (IMPORTANTE) ---
+const warCaptchaModal = document.getElementById("warCaptchaModal");
+const warCaptchaTokenDisplay = document.getElementById("warCaptchaToken");
+const warCaptchaInput = document.getElementById("warCaptchaInput");
+const warCaptchaSubmit = document.getElementById("warCaptchaSubmit");
+const warCaptchaCancel = document.getElementById("warCaptchaCancel");
+
+// --- Voz (WebRTC) ---
 const joinVoiceBtn = document.getElementById("joinVoiceBtn");
 const leaveVoiceBtn = document.getElementById("leaveVoiceBtn");
 const voiceStatus = document.getElementById("voiceStatus");
 const audioContainer = document.getElementById("audioContainer");
-const localMuteBtn = document.getElementById("localMuteBtn"); // optional in HTML
 
-// =================== VARIÁVEIS GLOBAIS & BLOQUEIO DE NOME ===================
-
+// =================== VARIÁVEIS GLOBAIS ===================
 let username = localStorage.getItem("username");
 let currentWarId = null;
 let currentCode = "";
-const HACK_CODES = ["ROOT", "SUDO", "HACK", "CODE", "BASH", "NANO", "PING", "DDOS", "VOID", "NULL", "JAVA", "NODE", "EXIT", "WIFI", "DATA"];
+const HACK_CODES = ["ROOT","SUDO","HACK","CODE","BASH","NANO","PING","DDOS","VOID","NULL","JAVA","NODE","EXIT","WIFI","DATA"];
 
 let localStream = null;
-let peers = {}; // peers[peerId] = { peer, name, wrapperEl, audioEl, pendingName }
-let isMuted = false; // local mute toggle
-let isVoiceJoined = false;
+let peers = {};
+let lastSentAt = 0;
+let myCaptchaAnswer = null; // Armazena a resposta do captcha
 
-// =================== Inicialização de nome ===================
-
+// =================== INICIALIZAÇÃO DE USUÁRIO ===================
 if (username) {
     if (nameInput) {
         nameInput.value = username;
@@ -118,12 +119,12 @@ if (saveNameBtn) {
         const newName = nameInput.value.trim();
         if (!newName) return alert("Por favor, digite um nome.");
         if (newName.length > 15) return alert("Nome muito longo! Máximo 15 letras.");
-
+        
         username = newName;
         localStorage.setItem("username", username);
         socket.emit("setUsername", username);
         addMessage(`Nome registrado permanentemente: ${username}`, "system");
-
+        
         nameInput.disabled = true;
         nameInput.style.opacity = "0.5";
         saveNameBtn.style.display = "none";
@@ -137,9 +138,36 @@ if (joinBtn) {
     };
 }
 
-// =================== FUNÇÕES DE CHAT E MÍDIA ===================
+// =================== FUNÇÕES AUXILIARES ===================
+function escapeHTML(str) {
+    return String(str || "").replace(/[&<>"'`=\/]/g, s => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;',"/":'&#x2F;','`':'&#96;','=':'&#61;'
+    })[s]);
+}
 
-function addMessage(content, type = "text", target = "public") {
+function formatTime(ts = Date.now()) {
+    return new Date(ts).toLocaleTimeString();
+}
+
+function canSendMessage(minDelayMs = 2000) {
+    const now = Date.now();
+    if (now - lastSentAt < minDelayMs) return false;
+    lastSentAt = now;
+    return true;
+}
+
+function parseSimpleMarkdown(text) {
+    let out = escapeHTML(text);
+    out = out.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    out = out.replace(/`(.+?)`/g, '<code>$1</code>');
+    out = out.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color:cyan">$1</a>');
+    return out;
+}
+
+// =================== CHAT PÚBLICO ===================
+
+function addMessage(content, type = "text", target = "public", ts = Date.now()) {
     const msg = document.createElement("div");
     msg.className = "message";
 
@@ -161,9 +189,13 @@ function addMessage(content, type = "text", target = "public") {
         video.src = content;
         video.controls = true;
         msg.appendChild(video);
-    } else {
-        msg.innerText = content;
     }
+
+    const timeSpan = document.createElement("span");
+    timeSpan.style.fontSize = "0.7em";
+    timeSpan.style.color = "#666";
+    timeSpan.innerText = ` [${formatTime(ts)}] `;
+    msg.prepend(timeSpan);
 
     const box = (target === "clan") ? clanChatDiv : terminal;
     if (box) {
@@ -172,51 +204,87 @@ function addMessage(content, type = "text", target = "public") {
     }
 }
 
-// send message
 if (sendBtn) {
     sendBtn.onclick = () => {
         const text = cmdInput.value.trim();
         if (!text) return;
-        socket.emit("terminalInput", { text, meta: "text", username });
+
+        if (!canSendMessage(1500)) {
+            addMessage("Calma! Espere um pouco para enviar outra mensagem.", "system");
+            return;
+        }
+
+        socket.emit("terminalInput", { text, meta: "text", username, ts: Date.now() });
         cmdInput.value = "";
     };
 }
 if (cmdInput) cmdInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendBtn.click(); });
 
-// handle broadcastInput robustly (fix name fallback)
-socket.on("broadcastInput", ({ from, payload }) => {
-    // payload might be undefined in some cases, guard
+socket.on("broadcastInput", ({ from, payload } = {}) => {
     payload = payload || {};
-    const nome = payload.username || from || payload.name || "Alguém";
-
+    const nome = payload.username || from || "Alguém";
+    const ts = payload.ts || Date.now();
+    
     if (payload.meta === "text") {
-        addMessage(`<b>${nome}:</b> ${payload.text}`, "text");
+        const parsed = parseSimpleMarkdown(payload.text || "");
+        addMessage(`<b>${escapeHTML(nome)}:</b> ${parsed}`, "text", "public", ts);
     } else {
-        addMessage(`<b>${nome} enviou:</b>`, "text");
-        addMessage(payload.data, payload.meta);
+        addMessage(`<b>${escapeHTML(nome)} enviou:</b>`, "text", "public", ts);
+        addMessage(payload.data, payload.meta, "public", ts);
     }
 });
 
-socket.on("system", (txt) => addMessage(txt, "system"));
+socket.on("system", (txt) => addMessage(txt, "system", "public", Date.now()));
 
-function sendFile(file, type) {
+// =================== UPLOAD & DRAG AND DROP ===================
+
+function handleFileSend(file) {
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) return alert("Arquivo muito grande! Máximo 10MB.");
-    addMessage(`Enviando ${type}... aguarde.`, "system");
+    const max = 10 * 1024 * 1024; // 10MB
+    if (file.size > max) return alert("Arquivo muito grande! Máx 10MB.");
+    
     const reader = new FileReader();
-    reader.onload = () => socket.emit("terminalInput", { meta: type, data: reader.result, username });
+    reader.onload = () => {
+        const preview = reader.result;
+        if(!confirm(`Deseja enviar o arquivo: ${file.name}?`)) return;
+
+        const meta = file.type.startsWith("image/") ? "image" : 
+                     (file.type.startsWith("audio/") ? "audio" : 
+                     (file.type.startsWith("video/") ? "video" : "file"));
+                     
+        addMessage(`Enviando ${file.name}...`, "system");
+        socket.emit("terminalInput", { meta, data: preview, username, ts: Date.now() });
+    };
     reader.readAsDataURL(file);
 }
 
 if (imgBtn) imgBtn.onclick = () => imageInput.click();
-if (imageInput) imageInput.onchange = () => { sendFile(imageInput.files[0], "image"); imageInput.value = ""; };
+if (imageInput) imageInput.onchange = () => { handleFileSend(imageInput.files[0]); imageInput.value = ""; };
 if (audioBtn) audioBtn.onclick = () => audioInput.click();
-if (audioInput) audioInput.onchange = () => { sendFile(audioInput.files[0], "audio"); audioInput.value = ""; };
+if (audioInput) audioInput.onchange = () => { handleFileSend(audioInput.files[0]); audioInput.value = ""; };
 if (videoBtn) videoBtn.onclick = () => videoInput.click();
-if (videoInput) videoInput.onchange = () => { sendFile(videoInput.files[0], "video"); videoInput.value = ""; };
-if (previewModal) previewModal.onclick = () => previewModal.style.display = "none";
+if (videoInput) videoInput.onchange = () => { handleFileSend(videoInput.files[0]); videoInput.value = ""; };
 
-// =================== CLÃS: GERAL E GUERRAS (mantive sua lógica) ===================
+if (dragOverlay) {
+    window.addEventListener("dragenter", (e) => { e.preventDefault(); });
+    window.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dragOverlay.classList.add("active");
+    });
+    dragOverlay.addEventListener("dragleave", (e) => {
+        if (e.relatedTarget === null) dragOverlay.classList.remove("active");
+    });
+    window.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dragOverlay.classList.remove("active");
+        if (e.dataTransfer.files.length > 0) {
+            handleFileSend(e.dataTransfer.files[0]);
+        }
+    });
+}
+if(previewModal) previewModal.onclick = () => previewModal.style.display = "none";
+
+// =================== CLÃS ===================
 
 if (createClanBtn) createClanBtn.onclick = () => socket.emit("createClan", clanInput.value);
 if (leaveClanBtn) leaveClanBtn.onclick = () => socket.emit("leaveClan");
@@ -230,9 +298,7 @@ if (demoteBtn) demoteBtn.onclick = () => socket.emit("demoteMember", promoteTarg
 
 if (kickBtn) kickBtn.onclick = () => socket.emit("kickMember", ownerTargetInput.value);
 if (muteBtn) muteBtn.onclick = () => socket.emit("muteMember", ownerTargetInput.value);
-if (banBtn) banBtn.onclick = () => {
-    if (confirm("Banir usuário permanentemente?")) socket.emit("banMember", ownerTargetInput.value);
-};
+if (banBtn) banBtn.onclick = () => { if (confirm("Banir usuário permanentemente?")) socket.emit("banMember", ownerTargetInput.value); };
 
 if (dissolveBtn) {
     dissolveBtn.onclick = () => {
@@ -240,7 +306,7 @@ if (dissolveBtn) {
         if (confirmacao === "DELETAR") {
             socket.emit("dissolveClan");
         } else {
-            alert("Ação cancelada. Você precisa digitar DELETAR.");
+            alert("Ação cancelada.");
         }
     };
 }
@@ -255,20 +321,11 @@ if (clanChatSendBtn) {
     };
 }
 
-// clanChat - robust naming
 socket.on("clanChat", (data) => {
     data = data || {};
-    const sender = data.from || data.username || "Alguém";
+    const sender = data.from || "Alguém";
     const nome = (sender === username) ? "[Eu]" : sender;
-    addMessage(`<b>${nome}:</b> ${data.text}`, "text", "clan");
-});
-
-socket.on("clanInfo", (msg) => addMessage(msg, "system"));
-
-socket.on("clanInviteReceived", (data) => {
-    addMessage(`📩 <b>CONVITE:</b> Clã <span style="color:yellow">${data.clanName}</span> te chamou!`, "system");
-    if (clanInput) clanInput.value = data.clanName;
-    if (typeof openTab === "function") openTab('tab-home');
+    addMessage(`<b>${escapeHTML(nome)}:</b> ${parseSimpleMarkdown(data.text || "")}`, "text", "clan", data.ts || Date.now());
 });
 
 socket.on("clanUpdated", (data) => {
@@ -281,40 +338,42 @@ socket.on("clanUpdated", (data) => {
 
     if (clanInfoDiv) {
         clanInfoDiv.innerHTML = `
-            <div style="color: #3b82f6; font-weight:bold; font-size: 1.1em">${data.name}</div>
-            <div>👑 Dono: ${data.owner}</div>
-            <div style="margin-top:5px; font-size:0.9em; color:#bbb">
-                🏆 Vitórias: ${data.wins} | ✨ Pontos: ${data.points}
-            </div>
+            <div style="color: #3b82f6; font-weight:bold; font-size: 1.1em">${escapeHTML(data.name)}</div>
+            <div>👑 Dono: ${escapeHTML(data.owner)}</div>
+            <div style="margin-top:5px; font-size:0.9em; color:#bbb">🏆 Vitórias: ${data.wins} | ✨ Pontos: ${data.points}</div>
         `;
     }
 
     if (membersListDiv && data.members) {
         membersListDiv.innerHTML = "";
         let myRole = "Membro";
+        
         data.members.forEach(member => {
-            // member can be { name, role, battles, muted }
-            const memberName = member.name || member.username || "Alguém";
+            const memberName = member.name || "Alguém";
             if (memberName === username) myRole = member.role;
+            
+            const badge = (member.role === "Dono") ? "👑" : 
+                          (member.role === "Admin") ? "🔧" : 
+                          (member.role === "Co-Admin") ? "⚙️" : "👤";
+                          
+            const mutedIcon = member.muted ? " 🔇" : "";
+            
             const item = document.createElement("div");
             item.className = "member-item";
-            const mutedIcon = member.muted ? "🔇" : "";
             item.innerHTML = `
                 <div class="member-info">
-                    <span class="member-name">${memberName} ${mutedIcon}</span>
-                    <span class="member-battles">⚔️ Batalhas: ${member.battles || 0}</span>
+                    <span class="member-name">${escapeHTML(memberName)} ${badge}${mutedIcon}</span>
+                    <span class="member-battles">⚔️ ${member.battles || 0}</span>
                 </div>
-                <span class="role-badge role-${(member.role || "Membro").replace(" ", "-")}">${member.role || "Membro"}</span>
+                <span class="role-badge role-${member.role.replace(" ","-")}">${escapeHTML(member.role)}</span>
             `;
             membersListDiv.appendChild(item);
         });
 
         if (warZonePanel) {
             warZonePanel.style.display = "block";
-            if (myRole === "Membro" || myRole === "Co-Admin") {
-                if (warConfigArea) warConfigArea.style.display = "none";
-            } else {
-                if (warConfigArea) warConfigArea.style.display = "block";
+            if (warConfigArea) {
+                warConfigArea.style.display = (myRole === "Membro" || myRole === "Co-Admin") ? "none" : "block";
             }
         }
     }
@@ -326,12 +385,40 @@ socket.on("clanList", (clansData) => {
     if (list.length === 0) html += "Nenhum clã criado.";
     list.forEach(c => {
         const count = Array.isArray(c.members) ? c.members.length : (c.members ? c.members.length : 0);
-        html += `• ${c.name} (Membros: ${count})<br>`;
+        html += `• ${escapeHTML(c.name)} (Membros: ${count})<br>`;
     });
     if (clanInfoDiv) clanInfoDiv.innerHTML = html;
 });
 
-// =================== GUERRA E MINIGAME ===================
+// =================== GUERRA & MINIGAME ===================
+
+// 1. Recebe o desafio do servidor (CAPTCHA)
+socket.on("warCaptchaChallenge", ({ warId, token }) => {
+    if (warCaptchaModal) {
+        warCaptchaTokenDisplay.innerText = token;
+        warCaptchaModal.style.display = "flex";
+        warCaptchaInput.value = "";
+        warCaptchaInput.focus();
+    }
+});
+
+// Botão Enviar Captcha
+if (warCaptchaSubmit) {
+    warCaptchaSubmit.onclick = () => {
+        const typed = warCaptchaInput.value.trim();
+        if (!typed) return alert("Digite o código!");
+        myCaptchaAnswer = typed;
+        warCaptchaModal.style.display = "none";
+        addMessage("Captcha salvo! Prepare-se para atacar.", "system");
+    };
+}
+
+if (warCaptchaCancel) {
+    warCaptchaCancel.onclick = () => {
+        warCaptchaModal.style.display = "none";
+        myCaptchaAnswer = null; 
+    };
+}
 
 function generateCode() {
     const word = HACK_CODES[Math.floor(Math.random() * HACK_CODES.length)];
@@ -354,26 +441,27 @@ if (hackInput) {
         const val = hackInput.value.toUpperCase();
         if (val === currentCode) {
             if (!currentWarId) return;
-            socket.emit("submitWarPoint", { warId: currentWarId, points: 15 });
-            if (hackFeedback) {
-                hackFeedback.style.color = "#0f0";
-                hackFeedback.innerText = ">> DADOS ENVIADOS <<";
-            }
+            
+            // Envia pontos + resposta do captcha
+            socket.emit("submitWarPoint", { 
+                warId: currentWarId, 
+                points: 15,
+                captchaAnswer: myCaptchaAnswer
+            });
+            
+            if (hackFeedback) { hackFeedback.style.color = "#0f0"; hackFeedback.innerText = ">> DADOS ENVIADOS <<"; }
             const hackTerm = document.querySelector(".hack-terminal");
-            if (hackTerm) hackTerm.classList.add("success-flash");
-            setTimeout(() => {
-                if (hackTerm) hackTerm.classList.remove("success-flash");
-            }, 200);
+            if (hackTerm) {
+                hackTerm.classList.add("success-flash");
+                setTimeout(() => hackTerm.classList.remove("success-flash"), 200);
+            }
             generateCode();
         } else if (!currentCode.startsWith(val)) {
-            if (hackFeedback) {
-                hackFeedback.style.color = "red";
-                hackFeedback.innerText = "ERRO DE SINTAXE";
-            }
-            if (hackInput) {
-                hackInput.classList.add("shake");
-                setTimeout(() => hackInput.classList.remove("shake"), 300);
-                hackInput.value = "";
+            if (hackFeedback) { hackFeedback.style.color = "red"; hackFeedback.innerText = "ERRO DE SINTAXE"; }
+            if (hackInput) { 
+                hackInput.classList.add("shake"); 
+                setTimeout(() => hackInput.classList.remove("shake"), 300); 
+                hackInput.value = ""; 
             }
         }
     });
@@ -389,237 +477,109 @@ function startMinigame(warId) {
 
 function endMinigame() {
     currentWarId = null;
+    myCaptchaAnswer = null; // Reseta captcha
     if (warGameArea) warGameArea.style.display = "none";
     if (noWarMsg) { noWarMsg.style.display = "block"; noWarMsg.innerText = "Aguardando conflito..."; }
     socket.emit("requestClans");
 }
 
 socket.on("warCreated", (info) => {
-    addMessage(`⚔️ GUERRA: ${info.clanA} vs ${info.clanB}`, "system");
+    addMessage(`⚔️ GUERRA: ${escapeHTML(info.clanA)} vs ${escapeHTML(info.clanB)}`, "system", "public", Date.now());
     startMinigame(info.warId);
 });
 
 socket.on("warUpdated", (data) => {
     if (!data || !data.scores) return;
     const clansKeys = Object.keys(data.scores);
+    
     if (clansKeys.length >= 2 && myClanScoreEl && enemyClanScoreEl && warProgressBar) {
         const clanA = clansKeys[0];
         const clanB = clansKeys[1];
         myClanScoreEl.innerText = `${clanA}: ${data.scores[clanA]}`;
         enemyClanScoreEl.innerText = `${clanB}: ${data.scores[clanB]}`;
+        
         const total = (data.scores[clanA] || 0) + (data.scores[clanB] || 0);
         if (total > 0) {
             const pct = ((data.scores[clanA] || 0) / total) * 100;
             warProgressBar.style.width = pct + "%";
         } else {
-            warProgressBar.style.width = "0%";
+            warProgressBar.style.width = "50%";
         }
     }
-    if (!currentWarId && data.warId) { currentWarId = data.warId; startMinigame(data.warId); }
+    
+    if (!currentWarId && data.warId) { 
+        currentWarId = data.warId; 
+        startMinigame(data.warId); 
+    }
 });
 
-socket.on("warEnded", (res) => {
-    addMessage(`🏁 Vencedor: ${res.winner || "Empate"}`, "system");
-    endMinigame();
+socket.on("warEnded", (res) => { 
+    addMessage(`🏁 Vencedor: ${escapeHTML(res.winner || "Empate")}`, "system", "public", Date.now()); 
+    endMinigame(); 
 });
 
-if (requestRankingBtn) {
-    requestRankingBtn.onclick = () => socket.emit("requestRanking");
-}
+if (requestRankingBtn) requestRankingBtn.onclick = () => socket.emit("requestRanking");
 socket.on("ranking", (list) => {
     rankingDiv.innerHTML = (list || []).map((c, i) =>
         `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #333; padding:4px;">
-            <span>#${i + 1} <b>${c.name}</b></span>
+            <span>#${i+1} <b>${escapeHTML(c.name)}</b></span>
             <span>${c.points || 0} pts</span>
          </div>`
     ).join("");
 });
 
-// =================== SISTEMA DE VOZ (WEBRTC) ===================
+// =================== VOZ (WebRTC) ===================
 
-// Helper para criar SimplePeer iniciador
 function createPeer(userToSignal, callerID, stream) {
     const peer = new SimplePeer({ initiator: true, trickle: false, stream: stream });
     peer.on("signal", signal => socket.emit("sendingSignal", { userToSignal, callerID, signal }));
-    peer.on("stream", stream => {
-        // When we receive stream from a peer, we create its audio DOM and use pendingName if exists
-        const name = peers[userToSignal] && peers[userToSignal].pendingName ? peers[userToSignal].pendingName : (peers[userToSignal] && peers[userToSignal].name) || "Alguém";
-        addAudioElement(userToSignal, stream, name);
-    });
-    peer.on("error", err => console.warn("Peer error:", err));
+    peer.on("stream", stream => addAudioElement(userToSignal, stream));
     return peer;
 }
 
-// Helper para responder peer (não iniciador)
 function addPeer(incomingSignal, callerID, stream) {
     const peer = new SimplePeer({ initiator: false, trickle: false, stream: stream });
     peer.on("signal", signal => socket.emit("returningSignal", { signal, callerID }));
     peer.signal(incomingSignal);
-    peer.on("stream", stream => {
-        const name = peers[callerID] && peers[callerID].pendingName ? peers[callerID].pendingName : (peers[callerID] && peers[callerID].name) || "Alguém";
-        addAudioElement(callerID, stream, name);
-    });
-    peer.on("error", err => console.warn("Peer error:", err));
+    peer.on("stream", stream => addAudioElement(callerID, stream));
     return peer;
 }
 
-// Cria a UI do usuário na call: bolinha + nome + menu
-function addAudioElement(id, stream, name = "Alguém") {
-    // Evita duplicata
-    if (document.getElementById(`audioBox_${id}`)) {
-        // Update name if pending
-        if (peers[id] && peers[id].wrapperEl) {
-            const lbl = peers[id].wrapperEl.querySelector(".voice-label");
-            if (lbl && name) lbl.innerText = name;
-            peers[id].name = name;
-        }
-        return;
-    }
+function addAudioElement(id, stream) {
+    if (document.getElementById(`audioBox_${id}`)) return;
 
-    const wrapper = document.createElement("div");
-    wrapper.id = `audioBox_${id}`;
-    wrapper.className = "voice-user-wrapper";
-    wrapper.style.position = "relative";
-    wrapper.style.padding = "6px";
-    wrapper.style.margin = "6px";
-    wrapper.style.border = "1px solid rgba(255,255,255,0.06)";
-    wrapper.style.borderRadius = "8px";
-    wrapper.style.display = "inline-block";
-    wrapper.style.minWidth = "120px";
-    wrapper.style.textAlign = "center";
-
-    // Label com o nome
-    const label = document.createElement("div");
-    label.className = "voice-label";
-    label.innerText = name;
-    label.style.fontSize = "0.9em";
-    label.style.marginBottom = "6px";
-    wrapper.appendChild(label);
-
-    // Elemento de áudio (invisível)
+    const div = document.createElement("div");
+    div.id = `audioBox_${id}`;
+    
     const audio = document.createElement("audio");
     audio.srcObject = stream;
     audio.autoplay = true;
     audio.playsInline = true;
-    audio.controls = false;
-    audio.style.width = "100%";
-    wrapper.appendChild(audio);
-
-    // Indicação simples de conectado
-    const statusDot = document.createElement("div");
-    statusDot.className = "voice-status-dot";
-    statusDot.style.width = "10px";
-    statusDot.style.height = "10px";
-    statusDot.style.borderRadius = "50%";
-    statusDot.style.background = "#6ee7b7";
-    statusDot.style.display = "inline-block";
-    statusDot.style.marginTop = "6px";
-    wrapper.appendChild(statusDot);
-
-    if (audioContainer) audioContainer.appendChild(wrapper);
-
-    // Armazena na tabela local
-    peers[id] = peers[id] || {};
-    peers[id].audioEl = audio;
-    peers[id].wrapperEl = wrapper;
-    peers[id].name = name;
-
-    // Cria o menu (volume, mute local, kick)
-    createUserMenu(id, name, wrapper, audio);
+    
+    div.appendChild(audio);
+    if (audioContainer) audioContainer.appendChild(div);
+    div.style.animation = "popIn 0.3s";
 }
-
-// Cria menu de ações quando clica na pessoa
-function createUserMenu(peerId, peerName, wrapper, audio) {
-    const menu = document.createElement("div");
-    menu.className = "voice-menu";
-    menu.style.position = "absolute";
-    menu.style.left = "6px";
-    menu.style.top = "6px";
-    menu.style.background = "rgba(0,0,0,0.8)";
-    menu.style.border = "1px solid rgba(255,255,255,0.06)";
-    menu.style.padding = "8px";
-    menu.style.borderRadius = "8px";
-    menu.style.display = "none";
-    menu.style.minWidth = "140px";
-    menu.style.zIndex = "50";
-    menu.style.color = "#fff";
-
-    menu.innerHTML = `
-        <div style="font-weight:bold; margin-bottom:6px">${peerName}</div>
-        <div style="margin-bottom:6px">
-            <label style="font-size:0.85em">Volume</label><br>
-            <input class="volume-slider" type="range" min="0" max="100" value="100">
-        </div>
-        <div style="display:flex; gap:6px; justify-content:space-between">
-            <button class="mute-btn" style="flex:1">Mutar</button>
-            <button class="kick-btn" style="flex:1; color:#ff6666">Expulsar</button>
-        </div>
-    `;
-
-    wrapper.appendChild(menu);
-
-    // Toggle menu ao clicar na wrapper
-    wrapper.addEventListener("click", (ev) => {
-        // don't close when clicking controls inside menu
-        if (ev.target.closest(".voice-menu")) return;
-        menu.style.display = menu.style.display === "none" ? "block" : "none";
-    });
-
-    // Volume slider
-    const slider = menu.querySelector(".volume-slider");
-    slider.oninput = (e) => {
-        audio.volume = e.target.value / 100;
-    };
-
-    // Mute local (só para você)
-    const muteBtn = menu.querySelector(".mute-btn");
-    muteBtn.onclick = (e) => {
-        e.stopPropagation();
-        audio.muted = !audio.muted;
-        muteBtn.innerText = audio.muted ? "Desmutar" : "Mutar";
-    };
-
-    // Kick (envia evento para o server, server decide permissões)
-    const kickBtnMenu = menu.querySelector(".kick-btn");
-    kickBtnMenu.onclick = (e) => {
-        e.stopPropagation();
-        if (!confirm(`Expulsar ${peerName} da chamada de voz?`)) return;
-        socket.emit("voiceKick", { targetId: peerId });
-    };
-}
-
-// =================== CONTROLES DE JOIN / LEAVE VOICE ===================
 
 if (joinVoiceBtn) {
     joinVoiceBtn.onclick = async () => {
         let cName = clanInput.value;
-
         if (!cName && clanInfoDiv) {
             const divName = clanInfoDiv.querySelector("div:first-child");
             if (divName) cName = divName.innerText;
         }
 
-        if (!cName) return alert("Entre em um clã primeiro.");
+        if (!cName) return alert("Você precisa estar em um clã.");
 
         try {
-            localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
-            localStream.getAudioTracks().forEach(t => t.enabled = true);
-            isMuted = false;
-
-            joinVoiceBtn.style.display = "none";
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            if (joinVoiceBtn) joinVoiceBtn.style.display = "none";
             if (leaveVoiceBtn) leaveVoiceBtn.style.display = "inline-block";
-            if (voiceStatus) {
-                voiceStatus.innerText = "Conectado | Falando...";
-                voiceStatus.style.color = "#10b981";
-            }
-            if (localMuteBtn) localMuteBtn.style.display = "inline-block";
-
-            socket.emit("joinVoiceChannel", { clanName: cName, username });
-            isVoiceJoined = true;
-
+            if (voiceStatus) { voiceStatus.innerText = "Conectado"; voiceStatus.style.color = "#10b981"; }
+            socket.emit("joinVoiceChannel", cName);
         } catch (err) {
             console.error("Erro no microfone:", err);
-            alert("Erro no microfone. Use HTTPS ou Localhost.");
+            alert("Erro ao acessar microfone.");
         }
     };
 }
@@ -628,138 +588,54 @@ if (leaveVoiceBtn) {
     leaveVoiceBtn.onclick = () => {
         let cName = clanInput.value;
         if (!cName && clanInfoDiv) {
-            const divName = clanInfoDiv.querySelector("div:first-child");
-            if (divName) cName = divName.innerText;
+             const divName = clanInfoDiv.querySelector("div:first-child");
+             if (divName) cName = divName.innerText;
         }
-        socket.emit("leaveVoiceChannel", { clanName: cName, username });
+        socket.emit("leaveVoiceChannel", cName);
         endCall();
     };
 }
 
 function endCall() {
     if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
+        localStream.getTracks().forEach(t => t.stop());
         localStream = null;
     }
-    Object.values(peers).forEach(p => {
-        try {
-            if (p.peer && p.peer.destroy) p.peer.destroy();
-        } catch (e) { /* ignore */ }
-    });
+    Object.values(peers).forEach(p => { try { if (p.destroy) p.destroy(); } catch(e) {} });
     peers = {};
     if (audioContainer) audioContainer.innerHTML = "";
     if (joinVoiceBtn) joinVoiceBtn.style.display = "inline-block";
     if (leaveVoiceBtn) leaveVoiceBtn.style.display = "none";
-    if (voiceStatus) {
-        voiceStatus.innerText = "Desconectado";
-        voiceStatus.style.color = "#aaa";
-    }
-    if (localMuteBtn) localMuteBtn.style.display = "none";
-    isVoiceJoined = false;
+    if (voiceStatus) { voiceStatus.innerText = "Desconectado"; voiceStatus.style.color = "#aaa"; }
 }
 
-// Botão de mute global (sua voz)
-if (localMuteBtn) {
-    localMuteBtn.onclick = () => {
-        if (!localStream) return;
-        isMuted = !isMuted;
-        localStream.getAudioTracks().forEach(track => track.enabled = !isMuted);
-        localMuteBtn.innerText = isMuted ? "Unmute" : "Mute";
-    };
-}
-
-// =================== SOCKET EVENTS PARA VOZ ===================
-
-// Recebe lista de usuários já na sala - aceita tanto array de ids como array de objetos {id, name}
 socket.on("allVoiceUsers", (users) => {
-    (users || []).forEach(u => {
-        if (typeof u === "string") {
-            const userID = u;
-            if (!peers[userID]) {
-                const peer = createPeer(userID, socket.id, localStream);
-                peers[userID] = { peer, name: "Alguém" };
-            }
-        } else if (typeof u === "object") {
-            const userID = u.id;
-            const name = u.name || u.username || "Alguém";
-            if (!peers[userID]) {
-                const peer = createPeer(userID, socket.id, localStream);
-                peers[userID] = { peer, name };
-                peers[userID].pendingName = name;
-            } else {
-                peers[userID].name = name;
-                peers[userID].pendingName = name;
-            }
-        }
+    users.forEach(userID => {
+        const id = (typeof userID === 'object') ? userID.id : userID;
+        const peer = createPeer(id, socket.id, localStream);
+        peers[id] = peer;
     });
 });
 
-// Outro usuário entrou - payload pode ter signal e callerID e opcionalmente name
 socket.on("userJoinedVoice", (payload) => {
-    if (!payload) return;
-    const callerID = payload.callerID || payload.id;
-    const incomingSignal = payload.signal;
-    const name = payload.name || payload.username || "Alguém";
-
-    const peer = addPeer(incomingSignal, callerID, localStream);
-    peers[callerID] = peers[callerID] || {};
-    peers[callerID].peer = peer;
-    peers[callerID].name = name;
-    peers[callerID].pendingName = name;
+    const peer = addPeer(payload.signal, payload.callerID, localStream);
+    peers[payload.callerID] = peer;
 });
 
-// Recebe retorno de signal (quando iniciador recebe resposta)
 socket.on("receivingReturnedSignal", (payload) => {
-    if (!payload) return;
     const item = peers[payload.id];
-    if (item && item.peer) item.peer.signal(payload.signal);
-    // update name if given
-    if (payload.name && peers[payload.id]) {
-        peers[payload.id].name = payload.name;
-        peers[payload.id].pendingName = payload.name;
-    }
+    if (item) item.signal(payload.signal);
 });
 
-// Quando alguém sai da call
 socket.on("userLeftVoice", (id) => {
     if (peers[id]) {
-        try { if (peers[id].peer && peers[id].peer.destroy) peers[id].peer.destroy(); } catch (e) {}
+        try { peers[id].destroy(); } catch (e) {}
         delete peers[id];
     }
     const audioDiv = document.getElementById(`audioBox_${id}`);
     if (audioDiv) audioDiv.remove();
 });
 
-// Servidor força desconexão (por exemplo kick)
-socket.on("voiceForceDisconnect", (payload) => {
-    // o server manda isso pro usuário alvo
-    // payload pode ter reason
-    endCall();
-    if (payload && payload.reason) addMessage(`System: ${payload.reason}`, "system");
-});
-
-// Se o servidor enviar info adicional (nome vinculado a id)
-socket.on("voiceUserInfo", ({ id, name } = {}) => {
-    if (!id) return;
-    if (peers[id]) {
-        peers[id].name = name;
-        peers[id].pendingName = name;
-        const wrapper = peers[id].wrapperEl;
-        if (wrapper) {
-            const lbl = wrapper.querySelector(".voice-label");
-            if (lbl) lbl.innerText = name;
-        }
-    }
-});
-
-// =================== EVENTOS GERAIS DO SOCKET (mantive) ===================
-
 socket.on("clanInviteReceived", (data) => {
-    addMessage(`📩 <b>CONVITE:</b> Clã <span style="color:yellow">${data.clanName}</span> te chamou!`, "system");
+    addMessage(`📩 <b>CONVITE:</b> Clã <span style="color:yellow">${escapeHTML(data.clanName)}</span> te chamou!`, "system");
 });
-
-socket.on("clanUpdated", (data) => {
-    // tratado acima
-});
-
-// =================== FIM DO ARQUIVO ===================
