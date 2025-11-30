@@ -1,4 +1,4 @@
-// server.js - Versão Estável e Segura
+// server.js - Versão Estável e Segura (com comandos de ADMIN)
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -25,16 +25,21 @@ const UPLOAD_MAX_BYTES = 10 * 1024 * 1024; // 10MB
 const CLEANUP_INTERVAL_MS = 1000 * 60 * 5; // Limpeza a cada 5 min
 
 // =================== ESTADO (BANCO DE DADOS EM MEMÓRIA) ===================
-const rooms = {}; 
-const clans = {}; 
-const userClans = new Map(); 
-const usernameToSocket = new Map(); 
-const socketToUsername = new Map(); 
-const userStats = {}; 
-const wars = {}; 
+const rooms = {};
+const clans = {};
+const userClans = new Map();
+const usernameToSocket = new Map();
+const socketToUsername = new Map();
+const userStats = {};
+const wars = {};
 const usernameMap = new Map(); // Persistência de Clã/Cargo (Resiste ao F5)
 const lastMsgAt = new Map(); // Rate Limit
 const warCaptchas = {}; // Tokens de segurança da guerra
+
+// ===== NOVO: Controle de Admins e Bans/Lockdown =====
+const admins = new Set(); // socket.id => admin ativo
+const bannedUsernames = new Map(); // username -> { expiresAt: timestamp | null }
+let siteLockdown = { active: false, until: null };
 
 // =================== HELPERS ===================
 function generateId(prefix = "") {
@@ -107,7 +112,48 @@ function getAllClansList() {
   return list;
 }
 
-// Rotina de Limpeza
+// Pequeno helper para enviar mensagens de sistema:
+function sendSystem(socket, txt) {
+  if (socket && socket.emit) socket.emit("system", txt);
+}
+
+// Verifica se um username está banido agora
+function isUsernameBanned(name) {
+  if (!name) return false;
+  const entry = bannedUsernames.get(name);
+  if (!entry) return false;
+  if (entry.expiresAt && Date.now() > entry.expiresAt) {
+    bannedUsernames.delete(name);
+    return false;
+  }
+  return true;
+}
+
+// Lista pública dos comandos (para /comandos)
+const ADMIN_COMMANDS_LIST = [
+  "/kick [username]",
+  "/ban [username] [minutos?]",
+  "/unban [username]",
+  "/mute [username]",
+  "/unmute [username]",
+  "/removeFile [filename]",
+  "/clearUploads",
+  "/clear",
+  "/announce [texto]",
+  "/system [texto]",
+  "/closeRoom [nome]",
+  "/openRoom [nome]",
+  "/voiceOff",
+  "/muteVoice [username]",
+  "/users",
+  "/rooms",
+  "/stats",
+  "/reload",
+  "/restart confirm",
+  "/lockdown [on|off] [minutos?]"
+];
+
+// ===== Rotina de Limpeza =====
 setInterval(() => {
   // Limpa salas vazias
   for (const r in rooms) {
@@ -121,6 +167,10 @@ setInterval(() => {
       delete warCaptchas[w];
     }
   }
+  // Limpa bans expirados
+  for (const [name, entry] of bannedUsernames.entries()) {
+    if (entry.expiresAt && Date.now() > entry.expiresAt) bannedUsernames.delete(name);
+  }
 }, CLEANUP_INTERVAL_MS);
 
 // =================== SOCKET LÓGICA ===================
@@ -133,10 +183,24 @@ io.on("connection", (socket) => {
   socket.room = null;
   socket.voiceRoom = null;
 
+  // --- 0. Helpers locais no contexto de socket ---
+  const isAdmin = () => admins.has(socket.id);
+  const requireAdmin = (cmd) => {
+    if (!isAdmin()) {
+      socket.emit("system", `Comando "${cmd}" requer privilégios de admin.`);
+      return false;
+    }
+    return true;
+  };
+
   // --- 1. CONFIGURAÇÃO DE NOME E RECONEXÃO ---
   socket.on("setUsername", (newName) => {
     if (!newName || typeof newName !== "string") return;
     newName = newName.slice(0, 25).trim();
+
+    if (isUsernameBanned(newName)) {
+      return socket.emit("system", `Nome "${newName}" está banido do servidor.`);
+    }
 
     const prevName = socketToUsername.get(socket.id);
     if (prevName) usernameToSocket.delete(prevName);
@@ -170,6 +234,9 @@ io.on("connection", (socket) => {
   // --- 2. SALAS PÚBLICAS ---
   socket.on("joinRoom", (r) => {
     if (!r || typeof r !== "string") return;
+    if (siteLockdown.active && !isAdmin()) {
+      return socket.emit("system", "O site está em lockdown. Entrada em salas temporariamente bloqueada.");
+    }
     if (socket.room && rooms[socket.room]) rooms[socket.room].users.delete(socket.id);
 
     socket.join(r);
@@ -193,22 +260,299 @@ io.on("connection", (socket) => {
       const meta = payload.meta || "text";
       const usernameFromPayload = socket.username || "Alguém";
       let text = typeof payload.text === "string" ? payload.text : "";
-      text = escapeForHtml(text); // Sanitização
+      text = text.trim();
 
       // Validação de Upload
       if (["image", "audio", "video", "file"].includes(meta)) {
+        if (siteLockdown.active && !isAdmin()) return socket.emit("system", "Uploads temporariamente desativados (lockdown).");
+
         const data = payload.data;
         if (typeof data !== "string" || !data.startsWith("data:")) return socket.emit("system", "Upload inválido.");
-        
+
         // Verificação aproximada de tamanho
         const sizeApprox = Math.ceil((data.length - data.indexOf(",") - 1) * 3 / 4);
         if (sizeApprox > UPLOAD_MAX_BYTES) return socket.emit("system", "Arquivo muito grande (Máx 10MB).");
       }
 
+      // ======== Comandos especiais ========
+      // Ativação de admin por flag: --ADMIN_SERVICE_ACTIVE [senha]
+      if (text.startsWith("--ADMIN_SERVICE_ACTIVE")) {
+        const parts = text.split(/\s+/);
+        const provided = parts[1] || null;
+        const REQUIRED = process.env.ADMIN_PASSWORD || null;
+
+        if (REQUIRED && (!provided || provided !== REQUIRED)) {
+          return socket.emit("system", "Senha de admin incorreta.");
+        }
+        admins.add(socket.id);
+        console.log(`Admin ativado: ${socket.username} (${socket.id})`);
+        return socket.emit("system", "Admin ativado para sua sessão. Use /comandos para ver a lista.");
+      }
+
+      // Lista de comandos (pública)
+      if (text === "/comandos") {
+        socket.emit("system", `Comandos de admin (só executáveis após ativar admin):\n${ADMIN_COMMANDS_LIST.join("\n")}\n`);
+        return;
+      }
+
+      // Só comandos que começam com '/' são tratados aqui.
+      if (text.startsWith("/")) {
+        const parts = text.slice(1).split(/\s+/);
+        const cmd = parts[0].toLowerCase();
+        const args = parts.slice(1);
+
+        // ---------- COMANDOS REQUERENDO ADMIN ----------
+        // Mapear os comandos e executar quando autorizado
+        const doKick = (targetName) => {
+          const t = getSocketByUsername(targetName);
+          if (!t) return socket.emit("system", "Usuário não encontrado.");
+          // força sair de salas e desconectar
+          try {
+            t.disconnect(true);
+          } catch(e) { /* ignore */ }
+          socket.emit("system", `Usuário ${targetName} expulso (kick).`);
+          console.log(`[ADMIN] ${socket.username} kickou ${targetName}`);
+        };
+
+        const doBan = (targetName, minutes) => {
+          if (!targetName) return socket.emit("system", "Use: /ban [username] [minutos?]");
+          const minutesNum = parseInt(minutes) || 0;
+          const expiresAt = minutesNum > 0 ? Date.now() + minutesNum * 60 * 1000 : null;
+          bannedUsernames.set(targetName, { expiresAt });
+          const t = getSocketByUsername(targetName);
+          if (t) {
+            try {
+              t.disconnect(true);
+            } catch(e) {}
+          }
+          socket.emit("system", `Usuário ${targetName} banido ${minutesNum>0?`por ${minutesNum} minutos`:"(permanente)"} .`);
+          console.log(`[ADMIN] ${socket.username} baniu ${targetName} (${minutesNum}m)`);
+        };
+
+        const doUnban = (targetName) => {
+          if (!targetName) return socket.emit("system", "Use: /unban [username]");
+          bannedUsernames.delete(targetName);
+          socket.emit("system", `Usuário ${targetName} desbanido.`);
+          console.log(`[ADMIN] ${socket.username} desbaniu ${targetName}`);
+        };
+
+        const doMute = (targetName) => {
+          const t = getSocketByUsername(targetName);
+          if (!t) return socket.emit("system", "Usuário não encontrado.");
+          // marcar como muted em userStats simples (pode mapear para clãs/geral)
+          userStats[targetName] = userStats[targetName] || {};
+          userStats[targetName].muted = true;
+          socket.emit("system", `${targetName} silenciado no chat.`);
+          console.log(`[ADMIN] ${socket.username} silenciou ${targetName}`);
+        };
+
+        const doUnmute = (targetName) => {
+          userStats[targetName] = userStats[targetName] || {};
+          userStats[targetName].muted = false;
+          socket.emit("system", `${targetName} desmutado.`);
+          console.log(`[ADMIN] ${socket.username} desmutou ${targetName}`);
+        };
+
+        const doRemoveFile = (filename) => {
+          if (!filename) return socket.emit("system", "Use: /removeFile [filename]");
+          const upath = path.join(__dirname, "public", "uploads", filename);
+          fs.unlink(upath, (err) => {
+            if (err) return socket.emit("system", `Erro ao remover: ${err.message}`);
+            socket.emit("system", `Arquivo ${filename} removido.`);
+            console.log(`[ADMIN] ${socket.username} removeu arquivo ${filename}`);
+          });
+        };
+
+        const doClearUploads = () => {
+          const dir = path.join(__dirname, "public", "uploads");
+          fs.readdir(dir, (err, files) => {
+            if (err) return socket.emit("system", "Erro ao listar uploads.");
+            files.forEach(f => {
+              try { fs.unlinkSync(path.join(dir, f)); } catch(e) {}
+            });
+            socket.emit("system", "Uploads limpos.");
+            console.log(`[ADMIN] ${socket.username} limpou uploads`);
+          });
+        };
+
+        const doClear = () => {
+          io.emit("clearChat");
+          socket.emit("system", "Chat público limpo.");
+          console.log(`[ADMIN] ${socket.username} limpou chat público`);
+        };
+
+        const doAnnounce = (texto) => {
+          if (!texto) return socket.emit("system", "Use: /announce [texto]");
+          io.emit("announcement", { text: texto, ts: Date.now() });
+          socket.emit("system", "Anúncio enviado.");
+          console.log(`[ADMIN] ${socket.username} enviou announcement: ${texto}`);
+        };
+
+        const doSystemMsg = (texto) => {
+          if (!texto) return socket.emit("system", "Use: /system [texto]");
+          io.emit("system", `[ADMIN] ${texto}`);
+          socket.emit("system", "Mensagem de sistema enviada.");
+          console.log(`[ADMIN] ${socket.username} enviou system: ${texto}`);
+        };
+
+        const doCloseRoom = (roomName) => {
+          if (!roomName) return socket.emit("system", "Use: /closeRoom [nome]");
+          if (rooms[roomName]) {
+            for (const uid of Array.from(rooms[roomName].users)) {
+              const s = io.sockets.sockets.get(uid);
+              if (s) {
+                s.leave(roomName);
+                s.emit("system", `Sala ${roomName} foi fechada pelo admin.`);
+                s.room = null;
+              }
+            }
+            delete rooms[roomName];
+            io.emit("system", `Sala ${roomName} fechada pelo admin.`);
+            socket.emit("system", `Sala ${roomName} fechada.`);
+            console.log(`[ADMIN] ${socket.username} fechou sala ${roomName}`);
+          } else {
+            socket.emit("system", "Sala não encontrada.");
+          }
+        };
+
+        const doOpenRoom = (roomName) => {
+          if (!roomName) return socket.emit("system", "Use: /openRoom [nome]");
+          rooms[roomName] = rooms[roomName] || { users: new Set() };
+          socket.emit("system", `Sala ${roomName} criada/aberta.`);
+          console.log(`[ADMIN] ${socket.username} abriu/criou sala ${roomName}`);
+        };
+
+        const doVoiceOff = () => {
+          // desconecta todos dos voice rooms
+          for (const id of Object.keys(rooms)) {
+            if (id.startsWith("voice_")) {
+              const r = rooms[id];
+              for (const uid of Array.from(r.users)) {
+                const s = io.sockets.sockets.get(uid);
+                if (s) {
+                  s.leave(id);
+                  s.voiceRoom = null;
+                  s.emit("voiceForceDisconnect", { reason: "Voice desligada pelo admin" });
+                }
+              }
+              delete rooms[id];
+            }
+          }
+          socket.emit("system", "Canais de voz desligados.");
+          console.log(`[ADMIN] ${socket.username} desligou voz global`);
+        };
+
+        const doMuteVoice = (targetName) => {
+          const t = getSocketByUsername(targetName);
+          if (!t) return socket.emit("system", "Usuário não encontrado.");
+          if (t.voiceRoom) {
+            try { t.leave(t.voiceRoom); } catch (e) {}
+            t.voiceRoom = null;
+            t.emit("voiceForceDisconnect", { reason: `Mute de voz por admin ${socket.username}` });
+            socket.emit("system", `${targetName} foi desconectado da voz.`);
+            console.log(`[ADMIN] ${socket.username} removeu ${targetName} da voz`);
+          } else {
+            socket.emit("system", `${targetName} não está em canal de voz.`);
+          }
+        };
+
+        const doUsers = () => {
+          const arr = [];
+          for (const [name, id] of usernameToSocket.entries()) {
+            const s = io.sockets.sockets.get(id);
+            arr.push({ name, id, room: s ? s.room : null });
+          }
+          socket.emit("system", `Usuários: ${JSON.stringify(arr, null, 2)}`);
+        };
+
+        const doRooms = () => {
+          const list = {};
+          for (const r in rooms) list[r] = { users: rooms[r].users.size || 0 };
+          socket.emit("system", `Salas: ${JSON.stringify(list, null, 2)}`);
+        };
+
+        const doStats = () => {
+          socket.emit("system", `Stats: sockets=${io.of("/").sockets.size}, clans=${Object.keys(clans).length}, wars=${Object.keys(wars).length}`);
+        };
+
+        const doReload = () => {
+          io.emit("forceReloadClients");
+          socket.emit("system", "Comando reload disparado para todos os clientes.");
+          console.log(`[ADMIN] ${socket.username} forçou reload clients`);
+        };
+
+        const doRestart = (confirm) => {
+          if (!confirm || confirm.toLowerCase() !== "confirm") {
+            return socket.emit("system", `Use /restart confirm para reiniciar o processo do servidor.`);
+          }
+          socket.emit("system", "Reiniciando servidor...");
+          console.log(`[ADMIN] ${socket.username} reiniciou o servidor (exec).`);
+          // Aguarda 500ms para enviar resposta e encerra
+          setTimeout(() => process.exit(0), 500);
+        };
+
+        const doLockdown = (mode, minutes) => {
+          if (!mode) return socket.emit("system", "Use: /lockdown on|off [minutos?]");
+          if (mode === "on") {
+            siteLockdown.active = true;
+            siteLockdown.until = minutes ? Date.now() + parseInt(minutes) * 60 * 1000 : null;
+            socket.emit("system", `Lockdown ativado ${minutes?`por ${minutes} minutos`:"(indefinido)"}.`);
+            console.log(`[ADMIN] ${socket.username} ativou lockdown`);
+          } else {
+            siteLockdown.active = false;
+            siteLockdown.until = null;
+            socket.emit("system", "Lockdown desativado.");
+            console.log(`[ADMIN] ${socket.username} desativou lockdown`);
+          }
+        };
+
+        // ---------- Execução dos comandos (controle de acesso) ----------
+        // Qualquer comando listadado abaixo requer admin
+        const adminCmds = new Set([
+          "kick","ban","unban","mute","unmute","removefile","clearuploads","clear","announce",
+          "system","closeroom","openroom","voiceoff","mutevoice","users","rooms","stats",
+          "reload","restart","lockdown"
+        ]);
+
+        if (adminCmds.has(cmd) && !requireAdmin(cmd)) return;
+
+        switch (cmd) {
+          case "kick": doKick(args[0]); break;
+          case "ban": doBan(args[0], args[1]); break;
+          case "unban": doUnban(args[0]); break;
+          case "mute": doMute(args[0]); break;
+          case "unmute": doUnmute(args[0]); break;
+          case "removefile": doRemoveFile(args[0]); break;
+          case "clearuploads": doClearUploads(); break;
+          case "clear": doClear(); break;
+          case "announce": doAnnounce(args.join(" ")); break;
+          case "system": doSystemMsg(args.join(" ")); break;
+          case "closeroom": doCloseRoom(args[0]); break;
+          case "openroom": doOpenRoom(args[0]); break;
+          case "voiceoff": doVoiceOff(); break;
+          case "mutevoice": doMuteVoice(args[0]); break;
+          case "users": doUsers(); break;
+          case "rooms": doRooms(); break;
+          case "stats": doStats(); break;
+          case "reload": doReload(); break;
+          case "restart": doRestart(args[0]); break;
+          case "lockdown": doLockdown(args[0], args[1]); break;
+          default:
+            socket.emit("system", `Comando desconhecido: ${cmd}`);
+            break;
+        }
+        return;
+      } // fim tratamento de comandos
+
+      // Se não for comando, é mensagem normal: aplicar sanitização
       if (socket.room) {
-        io.to(socket.room).emit("broadcastInput", { 
-            from: socket.id, 
-            payload: { meta, text, data: payload.data, username: usernameFromPayload, ts: Date.now() } 
+        // respeitar se usuário está silenciado por admin:
+        if (userStats[socket.username] && userStats[socket.username].muted) {
+          return socket.emit("system", "Você está silenciado e não pode enviar mensagens públicas.");
+        }
+        io.to(socket.room).emit("broadcastInput", {
+          from: socket.id,
+          payload: { meta, text: escapeForHtml(text), data: payload.data, username: usernameFromPayload, ts: Date.now() }
         });
       } else {
         socket.emit("system", "Você não está em uma sala.");
@@ -216,7 +560,7 @@ io.on("connection", (socket) => {
     } catch (err) { console.error(err); }
   });
 
-  // --- 4. GESTÃO DE CLÃS ---
+  // --- 4. GESTÃO DE CLÃS (mantido igual) ---
   socket.on("createClan", (name) => {
     if (!name || typeof name !== "string") return;
     name = name.trim();
@@ -229,7 +573,7 @@ io.on("connection", (socket) => {
       banned: new Set(), muted: new Set(),
       wins: 0, points: 0, logs: [], createdAt: Date.now()
     };
-    
+
     userClans.set(socket.id, name);
     usernameMap.set(socket.username, { clan: name, role: "owner" });
 
@@ -266,8 +610,8 @@ io.on("connection", (socket) => {
 
   // Funções de Hierarquia (Promover/Rebaixar) com Log
   const logAction = (cName, msg) => {
-      const c = clans[cName];
-      if(c) { c.logs = c.logs || []; c.logs.push({ ts: Date.now(), text: msg }); }
+    const c = clans[cName];
+    if(c) { c.logs = c.logs || []; c.logs.push({ ts: Date.now(), text: msg }); }
   };
 
   socket.on("promoteMember", (targetName) => {
@@ -311,7 +655,7 @@ io.on("connection", (socket) => {
     const c = clans[cName];
     if (c.owner !== socket.id) return;
     const tSocket = getSocketByUsername(targetName);
-    
+
     if (tSocket && tSocket.id !== socket.id) {
       removeUserFromClanStruct(cName, tSocket.id);
       usernameMap.delete(targetName);
@@ -367,37 +711,37 @@ io.on("connection", (socket) => {
     io.to("clan_" + cName).emit("clanChat", { from: socket.username, text: escapeForHtml(txt), ts: Date.now() });
   });
 
-  // --- 5. GUERRAS & CAPTCHA ---
+  // --- 5. GUERRAS & CAPTCHA (mantido igual) ---
   socket.on("createWar", ({ targetClan, durationSec }) => {
     const cName = getClanOfUser(socket.id); if (!cName) return;
     if (!targetClan) return socket.emit("system", "Clã alvo inválido.");
-    
+
     const warId = generateId("war");
     wars[warId] = { id: warId, clanA: cName, clanB: targetClan, scores: { [cName]: 0, [targetClan]: 0 }, active: true, createdAt: Date.now() };
 
     // Gera tokens para membros ativos
     warCaptchas[warId] = warCaptchas[warId] || {};
     const getMembers = (cl) => clans[cl] ? [clans[cl].owner, ...clans[cl].admins, ...clans[cl].coAdmins, ...clans[cl].members] : [];
-    
+
     [...getMembers(cName), ...getMembers(targetClan)].forEach(uid => {
-        if(!uid) return;
-        const token = Math.random().toString(36).substring(2, 6).toUpperCase();
-        warCaptchas[warId][uid] = token;
-        const s = io.sockets.sockets.get(uid);
-        if(s) s.emit("warCaptchaChallenge", { warId, token }); // Client deve mostrar esse token
+      if(!uid) return;
+      const token = Math.random().toString(36).substring(2, 6).toUpperCase();
+      warCaptchas[warId][uid] = token;
+      const s = io.sockets.sockets.get(uid);
+      if(s) s.emit("warCaptchaChallenge", { warId, token }); // Client deve mostrar esse token
     });
 
     io.to("clan_" + cName).to("clan_" + targetClan).emit("warCreated", { warId, clanA: cName, clanB: targetClan });
-    
+
     setTimeout(() => {
       if (wars[warId]) {
         const w = wars[warId];
         let winner = w.scores[w.clanA] > w.scores[w.clanB] ? w.clanA : (w.scores[w.clanB] > w.scores[w.clanA] ? w.clanB : null);
-        
+
         if (winner && clans[winner]) { clans[winner].wins++; clans[winner].points += 10; }
         if (clans[w.clanA]) clans[w.clanA].points += (w.scores[w.clanA] || 0);
         if (clans[w.clanB]) clans[w.clanB].points += (w.scores[w.clanB] || 0);
-        
+
         io.emit("warEnded", { warId, winner });
         delete wars[warId];
         delete warCaptchas[warId];
@@ -412,12 +756,12 @@ io.on("connection", (socket) => {
 
     // Verificação de Captcha
     if (warCaptchas[warId] && warCaptchas[warId][socket.id]) {
-        const expected = warCaptchas[warId][socket.id];
-        if (!captchaAnswer || String(captchaAnswer).toUpperCase() !== String(expected).toUpperCase()) {
-            return socket.emit("system", "Captcha incorreto.");
-        }
-        // Opcional: Rotacionar token para dificultar bot
-        // delete warCaptchas[warId][socket.id]; 
+      const expected = warCaptchas[warId][socket.id];
+      if (!captchaAnswer || String(captchaAnswer).toUpperCase() !== String(expected).toUpperCase()) {
+        return socket.emit("system", "Captcha incorreto.");
+      }
+      // Opcional: Rotacionar token para dificultar bot
+      // delete warCaptchas[warId][socket.id];
     }
 
     w.scores[cName] = (w.scores[cName] || 0) + (points || 1);
@@ -454,7 +798,7 @@ io.on("connection", (socket) => {
   socket.on("leaveVoiceChannel", (clanName) => {
     const roomID = clanName ? `voice_${clanName}` : socket.voiceRoom;
     if (!roomID || !rooms[roomID]) return;
-    
+
     rooms[roomID].users.delete(socket.id);
     socket.leave(roomID);
     socket.voiceRoom = null;
@@ -468,14 +812,14 @@ io.on("connection", (socket) => {
 
     const targetSocket = io.sockets.sockets.get(targetId);
     if (targetSocket) {
-        const roomID = targetSocket.voiceRoom;
-        if(roomID) {
-            targetSocket.leave(roomID);
-            targetSocket.voiceRoom = null;
-            if(rooms[roomID]) rooms[roomID].users.delete(targetId);
-            targetSocket.emit("voiceForceDisconnect", { reason: `Expulso por ${socket.username}` });
-            io.to(roomID).emit("userLeftVoice", targetId);
-        }
+      const roomID = targetSocket.voiceRoom;
+      if(roomID) {
+        targetSocket.leave(roomID);
+        targetSocket.voiceRoom = null;
+        if(rooms[roomID]) rooms[roomID].users.delete(targetId);
+        targetSocket.emit("voiceForceDisconnect", { reason: `Expulso por ${socket.username}` });
+        io.to(roomID).emit("userLeftVoice", targetId);
+      }
     }
   });
 
@@ -485,27 +829,33 @@ io.on("connection", (socket) => {
     if(socket.username) usernameToSocket.delete(socket.username);
     lastMsgAt.delete(socket.id);
 
+    // remove admin se era admin (sessão acaba)
+    if (admins.has(socket.id)) {
+      admins.delete(socket.id);
+      console.log(`Admin removido na desconexão: ${socket.id}`);
+    }
+
     // Limpa salas públicas
     if (socket.room && rooms[socket.room]) {
-        rooms[socket.room].users.delete(socket.id);
-        if (rooms[socket.room].users.size === 0) delete rooms[socket.room];
+      rooms[socket.room].users.delete(socket.id);
+      if (rooms[socket.room].users.size === 0) delete rooms[socket.room];
     }
 
     // Limpa Voz
     if (socket.voiceRoom && rooms[socket.voiceRoom]) {
-        rooms[socket.voiceRoom].users.delete(socket.id);
-        io.to(socket.voiceRoom).emit("userLeftVoice", socket.id);
-        if (rooms[socket.voiceRoom].users.size === 0) delete rooms[socket.voiceRoom];
+      rooms[socket.voiceRoom].users.delete(socket.id);
+      io.to(socket.voiceRoom).emit("userLeftVoice", socket.id);
+      if (rooms[socket.voiceRoom].users.size === 0) delete rooms[socket.voiceRoom];
     }
 
     // Limpa Estrutura Ativa do Clã (Mas mantém usernameMap)
     const cName = getClanOfUser(socket.id);
     if (cName && clans[cName]) {
-        clans[cName].members.delete(socket.id);
-        clans[cName].admins.delete(socket.id);
-        clans[cName].coAdmins.delete(socket.id);
-        userClans.delete(socket.id);
-        notifyClanUpdate(cName);
+      clans[cName].members.delete(socket.id);
+      clans[cName].admins.delete(socket.id);
+      clans[cName].coAdmins.delete(socket.id);
+      userClans.delete(socket.id);
+      notifyClanUpdate(cName);
     }
   });
 });

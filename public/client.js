@@ -73,7 +73,7 @@ const myClanScoreEl = document.getElementById("myClanScore");
 const enemyClanScoreEl = document.getElementById("enemyClanScore");
 const warProgressBar = document.getElementById("warProgressBar");
 
-// --- Elementos do Captcha de Guerra (IMPORTANTE) ---
+// --- Elementos do Captcha de Guerra ---
 const warCaptchaModal = document.getElementById("warCaptchaModal");
 const warCaptchaTokenDisplay = document.getElementById("warCaptchaToken");
 const warCaptchaInput = document.getElementById("warCaptchaInput");
@@ -95,7 +95,7 @@ const HACK_CODES = ["ROOT","SUDO","HACK","CODE","BASH","NANO","PING","DDOS","VOI
 let localStream = null;
 let peers = {};
 let lastSentAt = 0;
-let myCaptchaAnswer = null; // Armazena a resposta do captcha
+let myCaptchaAnswer = null;
 
 // =================== INICIALIZAÇÃO DE USUÁRIO ===================
 if (username) {
@@ -189,13 +189,20 @@ function addMessage(content, type = "text", target = "public", ts = Date.now()) 
         video.src = content;
         video.controls = true;
         msg.appendChild(video);
+    } else if (type === "announce") {
+        // Estilo especial para anúncios
+        msg.style.borderLeft = "4px solid #ef4444";
+        msg.style.backgroundColor = "rgba(239, 68, 68, 0.1)";
+        msg.style.padding = "10px";
+        msg.innerHTML = `<b style="color:#ef4444">📢 ANÚNCIO:</b> ${content}`;
     }
 
     const timeSpan = document.createElement("span");
     timeSpan.style.fontSize = "0.7em";
     timeSpan.style.color = "#666";
     timeSpan.innerText = ` [${formatTime(ts)}] `;
-    msg.prepend(timeSpan);
+    
+    if(type !== "announce") msg.prepend(timeSpan);
 
     const box = (target === "clan") ? clanChatDiv : terminal;
     if (box) {
@@ -209,6 +216,7 @@ if (sendBtn) {
         const text = cmdInput.value.trim();
         if (!text) return;
 
+        // Rate limit simples (server valida também)
         if (!canSendMessage(1500)) {
             addMessage("Calma! Espere um pouco para enviar outra mensagem.", "system");
             return;
@@ -235,6 +243,32 @@ socket.on("broadcastInput", ({ from, payload } = {}) => {
 });
 
 socket.on("system", (txt) => addMessage(txt, "system", "public", Date.now()));
+
+// =================== EVENTOS DE ADMINISTRAÇÃO ===================
+
+// 1. Limpar Chat (/clear)
+socket.on("clearChat", () => {
+    if(terminal) terminal.innerHTML = "";
+    addMessage("🧹 O chat foi limpo por um administrador.", "system");
+});
+
+// 2. Anúncio Global (/announce)
+socket.on("announcement", (data) => {
+    alert(`📢 ANÚNCIO: ${data.text}`);
+    addMessage(escapeHTML(data.text), "announce");
+});
+
+// 3. Forçar Reload (/reload)
+socket.on("forceReloadClients", () => {
+    addMessage("🔄 O servidor está reiniciando clientes...", "system");
+    setTimeout(() => location.reload(), 1000);
+});
+
+// 4. Forçar desconexão da voz (kick da voz)
+socket.on("voiceForceDisconnect", (data) => {
+    endCall(); // Função que já existe para fechar WebRTC
+    addMessage(`🔊 Você foi desconectado da voz: ${data.reason}`, "system");
+});
 
 // =================== UPLOAD & DRAG AND DROP ===================
 
@@ -392,7 +426,6 @@ socket.on("clanList", (clansData) => {
 
 // =================== GUERRA & MINIGAME ===================
 
-// 1. Recebe o desafio do servidor (CAPTCHA)
 socket.on("warCaptchaChallenge", ({ warId, token }) => {
     if (warCaptchaModal) {
         warCaptchaTokenDisplay.innerText = token;
@@ -402,7 +435,6 @@ socket.on("warCaptchaChallenge", ({ warId, token }) => {
     }
 });
 
-// Botão Enviar Captcha
 if (warCaptchaSubmit) {
     warCaptchaSubmit.onclick = () => {
         const typed = warCaptchaInput.value.trim();
@@ -442,7 +474,6 @@ if (hackInput) {
         if (val === currentCode) {
             if (!currentWarId) return;
             
-            // Envia pontos + resposta do captcha
             socket.emit("submitWarPoint", { 
                 warId: currentWarId, 
                 points: 15,
@@ -477,7 +508,7 @@ function startMinigame(warId) {
 
 function endMinigame() {
     currentWarId = null;
-    myCaptchaAnswer = null; // Reseta captcha
+    myCaptchaAnswer = null; 
     if (warGameArea) warGameArea.style.display = "none";
     if (noWarMsg) { noWarMsg.style.display = "block"; noWarMsg.innerText = "Aguardando conflito..."; }
     socket.emit("requestClans");
