@@ -670,3 +670,159 @@ socket.on("userLeftVoice", (id) => {
 socket.on("clanInviteReceived", (data) => {
     addMessage(`📩 <b>CONVITE:</b> Clã <span style="color:yellow">${escapeHTML(data.clanName)}</span> te chamou!`, "system");
 });
+
+// ========================================================
+//  MÓDULO VISUAL: FUNDO REATIVO (MOUSE + CLICK)
+// ========================================================
+(function initBackgroundAnimation() {
+    const canvas = document.getElementById('bg-canvas');
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    let particles = [];
+    const particleCount = 70; 
+
+    // Rastreamento do Mouse
+    let mouse = { x: null, y: null, radius: 150 };
+
+    window.addEventListener('mousemove', (e) => {
+        mouse.x = e.x;
+        mouse.y = e.y;
+    });
+
+    // Se o mouse sair da tela, anula a posição
+    window.addEventListener('mouseout', () => {
+        mouse.x = null;
+        mouse.y = null;
+    });
+
+    // Efeito de Explosão no Clique
+    window.addEventListener('mousedown', (e) => {
+        const clickX = e.x;
+        const clickY = e.y;
+        
+        particles.forEach(p => {
+            const dx = p.x - clickX;
+            const dy = p.y - clickY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+
+            // Se a partícula estiver perto do clique (raio de 200px)
+            if (dist < 200) {
+                const forceDirectionX = dx / dist;
+                const forceDirectionY = dy / dist;
+                const force = (200 - dist) / 10; 
+                
+                // Empurra a partícula violentamente
+                p.speedX += forceDirectionX * force;
+                p.speedY += forceDirectionY * force;
+            }
+        });
+    });
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    class Particle {
+        constructor() { this.reset(); }
+
+        reset() {
+            this.x = Math.random() * canvas.width;
+            this.y = Math.random() * canvas.height;
+            this.size = Math.random() * 2 + 1;
+            
+            this.baseSpeedX = (Math.random() - 0.5) * 1;
+            this.baseSpeedY = (Math.random() - 0.5) * 1;
+            
+            this.speedX = this.baseSpeedX;
+            this.speedY = this.baseSpeedY;
+            
+            // Cores Hacker/Cyberpunk
+            const colors = ['#0f0', '#00ffff', '#b026ff', '#ffffff']; 
+            this.color = colors[Math.floor(Math.random() * colors.length)];
+            
+            this.alpha = 0;
+            this.fadeIn = true;
+        }
+
+        update() {
+            this.x += this.speedX;
+            this.y += this.speedY;
+
+            // Fricção (para desacelerar depois da explosão do clique)
+            if (Math.abs(this.speedX) > Math.abs(this.baseSpeedX)) { this.speedX *= 0.95; }
+            if (Math.abs(this.speedY) > Math.abs(this.baseSpeedY)) { this.speedY *= 0.95; }
+
+            // Fade in/out
+            if (this.fadeIn) {
+                this.alpha += 0.01;
+                if (this.alpha >= 1) this.fadeIn = false;
+            } else {
+                this.alpha -= 0.005;
+            }
+
+            // Reset se sair da tela ou sumir
+            if (this.alpha <= 0 || this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
+                this.reset();
+            }
+        }
+
+        draw() {
+            ctx.globalAlpha = this.alpha;
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+
+            // 1. Conexão entre partículas (Rede)
+            particles.forEach(p => {
+                const dx = p.x - this.x;
+                const dy = p.y - this.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (dist < 100) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = this.color;
+                    ctx.lineWidth = 0.2;
+                    ctx.globalAlpha = (1 - dist/100) * 0.3 * this.alpha;
+                    ctx.moveTo(this.x, this.y);
+                    ctx.lineTo(p.x, p.y);
+                    ctx.stroke();
+                }
+            });
+
+            // 2. Conexão com o Mouse (Efeito Hack)
+            if (mouse.x != null) {
+                const dx = mouse.x - this.x;
+                const dy = mouse.y - this.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (dist < mouse.radius) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = '#fff'; 
+                    ctx.lineWidth = 0.5;
+                    ctx.globalAlpha = (1 - dist/mouse.radius) * 0.8;
+                    ctx.moveTo(this.x, this.y);
+                    ctx.lineTo(mouse.x, mouse.y);
+                    ctx.stroke();
+                }
+            }
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    for (let i = 0; i < particleCount; i++) {
+        particles.push(new Particle());
+    }
+
+    function animate() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        particles.forEach(p => { p.update(); p.draw(); });
+        requestAnimationFrame(animate);
+    }
+    animate();
+})();
