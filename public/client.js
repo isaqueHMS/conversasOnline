@@ -91,7 +91,7 @@ let username = localStorage.getItem("username");
 let currentWarId = null;
 let currentCode = "";
 const HACK_CODES = ["ROOT","SUDO","HACK","CODE","BASH","NANO","PING","DDOS","VOID","NULL","JAVA","NODE","EXIT","WIFI","DATA"];
-
+let lastClanInvite = null;
 let localStream = null;
 let peers = {};
 let lastSentAt = 0;
@@ -323,8 +323,16 @@ if(previewModal) previewModal.onclick = () => previewModal.style.display = "none
 if (createClanBtn) createClanBtn.onclick = () => socket.emit("createClan", clanInput.value);
 if (leaveClanBtn) leaveClanBtn.onclick = () => socket.emit("leaveClan");
 if (listClansBtn) listClansBtn.onclick = () => socket.emit("requestClans");
-if (acceptInviteBtn) acceptInviteBtn.onclick = () => socket.emit("acceptInvite", clanInput.value);
-if (declineInviteBtn) declineInviteBtn.onclick = () => socket.emit("declineInvite", clanInput.value);
+
+acceptInviteBtn.onclick = () => {
+    if (!lastClanInvite) return alert("Nenhum convite pendente!");
+    socket.emit("acceptInvite", lastClanInvite);
+};
+declineInviteBtn.onclick = () => {
+    if (!lastClanInvite) return alert("Nenhum convite pendente!");
+    socket.emit("declineInvite", lastClanInvite);
+    lastClanInvite = null;
+};
 
 if (inviteBtn) inviteBtn.onclick = () => socket.emit("inviteToClan", inviteTargetInput.value);
 if (promoteBtn) promoteBtn.onclick = () => socket.emit("promoteMember", promoteTargetInput.value);
@@ -668,8 +676,13 @@ socket.on("userLeftVoice", (id) => {
 });
 
 socket.on("clanInviteReceived", (data) => {
-    addMessage(`📩 <b>CONVITE:</b> Clã <span style="color:yellow">${escapeHTML(data.clanName)}</span> te chamou!`, "system");
+    lastClanInvite = data.clanName;  // salva o clã correto
+    addMessage(
+        `📩 <b>CONVITE:</b> Clã <span style="color:yellow">${escapeHTML(data.clanName)}</span> te chamou!`,
+        "system"
+    );
 });
+
 
 // ========================================================
 //  MÓDULO VISUAL: FUNDO REATIVO (MOUSE + CLICK)
