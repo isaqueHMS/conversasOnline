@@ -4,6 +4,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const path = require("path");
 const fs = require("fs");
+const pendingInvites = new Map();
 
 const app = express();
 const server = http.createServer(app);
@@ -16,7 +17,7 @@ app.use(express.static(path.join(__dirname, "public")));
 // =================== CONFIGURAÇÕES ===================
 const LIMITS = {
   admins: 3,
-  coAdmins: 3,
+  coAdmins: 4,
   members: 50
 };
 
@@ -156,9 +157,16 @@ const ADMIN_COMMANDS_LIST = [
 // ===== Rotina de Limpeza =====
 setInterval(() => {
   // Limpa salas vazias
-  for (const r in rooms) {
-    if (!rooms[r] || !rooms[r].users || rooms[r].users.size === 0) delete rooms[r];
-  }
+for (const r in rooms) {
+    const users = rooms[r].users;
+
+    // se não existe set de usuários OU está vazio -> exclui
+    if (!users || users.size === 0) {
+        delete rooms[r];
+        console.log("Sala removida:", r);
+    }
+}
+
   // Limpa guerras velhas (> 1 hora)
   const now = Date.now();
   for (const w in wars) {
@@ -177,7 +185,7 @@ setInterval(() => {
 io.on("connection", (socket) => {
   console.log("Conectado:", socket.id);
 
-  let username = "Anônimo";
+  let username = "carinha sem nome";
   socketToUsername.set(socket.id, username);
   socket.username = username;
   socket.room = null;
@@ -582,31 +590,61 @@ io.on("connection", (socket) => {
     notifyClanUpdate(name);
   });
 
-  socket.on("inviteToClan", (targetName) => {
-    const cName = getClanOfUser(socket.id); if (!cName) return;
+socket.on("inviteToClan", (targetName) => {
+    const cName = getClanOfUser(socket.id);
+    if (!cName) return socket.emit("clanInfo", "Você não está em um clã.");
+
     const tSocket = getSocketByUsername(targetName);
-    if (tSocket) {
-      tSocket.emit("clanInviteReceived", { clanName: cName, from: socket.username });
-      socket.emit("clanInfo", `Convite enviado para ${targetName}.`);
-    } else {
-      socket.emit("clanInfo", "Usuário não encontrado.");
+    if (!tSocket) return socket.emit("clanInfo", "Usuário não encontrado.");
+
+    // Salva convite
+    if (!pendingInvites.has(tSocket.id)) pendingInvites.set(tSocket.id, new Set());
+    pendingInvites.get(tSocket.id).add(cName);
+
+    tSocket.emit("clanInviteReceived", { 
+        clanName: cName, 
+        from: socket.username 
+    });
+
+    socket.emit("clanInfo", `Convite enviado para ${targetName}.`);
+});
+
+socket.on("acceptInvite", (cName) => {
+    if (!cName || !clans[cName])
+        return socket.emit("clanInfo", "Clã não existe.");
+
+    // Verifica se realmente foi convidado
+    const invites = pendingInvites.get(socket.id);
+    if (!invites || !invites.has(cName)) {
+        return socket.emit("clanInfo", "Você não tem convite para este clã.");
     }
-  });
 
-  socket.on("acceptInvite", (cName) => {
-    if (!cName || !clans[cName]) return socket.emit("clanInfo", "Clã não existe.");
+    // Remove convite após aceitar
+    invites.delete(cName);
+    if (invites.size === 0) pendingInvites.delete(socket.id);
+
+    // Remove usuário de clã anterior (se houver)
+    const oldClan = getClanOfUser(socket.id);
+    if (oldClan && clans[oldClan]) {
+        clans[oldClan].members.delete(socket.id);
+        clans[oldClan].admins.delete(socket.id);
+        clans[oldClan].coAdmins.delete(socket.id);
+        userClans.delete(socket.id);
+        notifyClanUpdate(oldClan);
+    }
+
+    // Adiciona no novo clã
     const c = clans[cName];
-
-    if (c.banned.has(socket.id) || c.banned.has(socket.username)) return socket.emit("clanInfo", "Você está banido deste clã.");
-
     c.members.add(socket.id);
+
     userClans.set(socket.id, cName);
     usernameMap.set(socket.username, { clan: cName, role: "member" });
 
     socket.join("clan_" + cName);
-    socket.emit("clanInfo", `Entrou em ${cName}`);
+    socket.emit("clanInfo", `Você entrou no clã ${cName}.`);
     notifyClanUpdate(cName);
-  });
+});
+
 
   // Funções de Hierarquia (Promover/Rebaixar) com Log
   const logAction = (cName, msg) => {
